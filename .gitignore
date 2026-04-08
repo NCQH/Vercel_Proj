@@ -1,6 +1,8 @@
 # Environment
 .env
-
+envs/
+.gitignore
+.vscode/
 # Python
 __pycache__/
 *.py[cod]
@@ -17,3 +19,5 @@ build/
 
 # AI logs — tracked structure, ignored content
 .ai-log/*.jsonl
+JOURNAL_template.md
+WORKLOG_template.md
