@@ -21,3 +21,8 @@ build/
 .ai-log/*.jsonl
 JOURNAL_template.md
 WORKLOG_template.md
+.claude/settings.json
+.codex/hooks.json
+.cursor/hooks.json
+.gemini/settings.json
+.github/hooks/hooks.json

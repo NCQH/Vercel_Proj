@@ -29,6 +29,43 @@ def fetch_url(url: str) -> str:
         return f"Error: {e}"
 
 
+def get_tool_schemas():
+    schemas = []
+    for name, tool in TOOLS.items():
+        schemas.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": tool["description"],
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        k: {"type": "string"}
+                        for k in tool["parameters"].keys()
+                    },
+                    "required": list(tool["parameters"].keys()),
+                },
+            }
+        })
+    return schemas
+
+
+def execute_tool(name: str, args: dict) -> str:
+    """Execute a tool by name."""
+    tool = TOOLS.get(name)
+    if not tool:
+        return f"Tool '{name}' does not exist"
+    return tool["fn"](**args)
+
+from src.rag.qa import build_qa
+
+qa_chain = build_qa()
+
+
+def search_course_material(question: str):
+    result = qa_chain.invoke({"input": question})
+    return result["answer"]
+
 # Tool registry - the agent uses this dict
 TOOLS = {
     "search_web": {
@@ -47,30 +84,3 @@ TOOLS = {
         "parameters": {"url": "string"},
     },
 }
-
-
-def get_tool_schemas() -> list[dict]:
-    """Return tool schemas in Anthropic API format."""
-    schemas = []
-    for name, tool in TOOLS.items():
-        schemas.append({
-            "name": name,
-            "description": tool["description"],
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    k: {"type": v, "description": k}
-                    for k, v in tool["parameters"].items()
-                },
-                "required": list(tool["parameters"].keys()),
-            },
-        })
-    return schemas
-
-
-def execute_tool(name: str, args: dict) -> str:
-    """Execute a tool by name."""
-    tool = TOOLS.get(name)
-    if not tool:
-        return f"Tool '{name}' does not exist"
-    return tool["fn"](**args)
