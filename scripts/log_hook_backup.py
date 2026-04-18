@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+"""
+Shared AI hook logger — works with Claude Code, Gemini CLI, Codex, Cursor, Copilot.
+Reads JSON from stdin, normalizes to common format, appends to .ai-log/session.jsonl
+"""
 import json
 import os
 import sys
@@ -14,6 +19,26 @@ def git(cmd):
     except Exception:
         return ""
 
+
+# def detect_tool(data: dict) -> str:
+#     """Detect which AI tool sent this hook event."""
+#     tool_env = os.environ.get("AI_TOOL_NAME", "").lower()
+#     if tool_env:
+#         return tool_env
+#     # Heuristics
+#     if "transcript_path" in data:
+#         return "codex"
+#     if data.get("hook_event_name", "").startswith(("Before", "After", "Session", "Pre", "Notification")):
+#         return "gemini"
+#     if data.get("hook_event_name", "")[0:1].islower():
+#         # camelCase event names → Cursor or Copilot
+#         if "workspace_roots" in data:
+#             return "cursor"
+#         if "toolName" in data:
+#             return "copilot"
+#     if "hook_event_name" in data:
+#         return "claude"
+#     return "unknown"
 
 def detect_tool(data: dict) -> str:
     """Detect which AI tool sent this hook event."""
@@ -35,8 +60,7 @@ def detect_tool(data: dict) -> str:
         return "claude"
     return "unknown"
 
-
-def normalize(data: dict, tool: str):
+def normalize(data: dict, tool: str) -> dict | None:
     """Normalize tool-specific payload to common log entry."""
     event = data.get("hook_event_name") or data.get("event", "")
     ts = datetime.now(VN_TZ).isoformat()
@@ -113,13 +137,6 @@ def normalize(data: dict, tool: str):
             "prompt": data.get("prompt", "")[:1000],
             "tool_name": data.get("toolName", ""),
             "tool_args": data.get("toolArgs"),
-        })
-
-    elif tool == "antigravity":
-        base.update({
-            "prompt": data.get("prompt", "")[:1000],
-            "turn_id": data.get("turn_id", ""),
-            "response_summary": data.get("response_summary", ""),
         })
 
     # Skip empty/noise events
