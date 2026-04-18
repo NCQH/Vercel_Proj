@@ -1,12 +1,9 @@
 import os
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_openai import OpenAIEmbeddings
-
-from src.config import VECTOR_DB_PATH, DOCUMENT_PATH
-
-
+from src.rag.embedding import get_embedding
+from src.rag.vectorstore import get_vectorstore, add_documents
+from src.config import CHROMA_DB_DIR, DOCUMENT_PATH, CHUNK_SIZE, CHUNK_OVERLAP
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
 
 
@@ -24,28 +21,29 @@ def load_documents():
             loader = TextLoader(path, encoding="utf-8")
             docs.extend(loader.load())
 
+        print(f'Loaded {file}')
+
     print(f"Loaded {len(docs)} documents")
 
     return docs
 
-
-def build_vectorstore():
-
-    documents = load_documents()
-
+# chunk strategy
+def chunk_documents(documents):
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP
     )
 
     chunks = splitter.split_documents(documents)
 
-    embeddings = OpenAIEmbeddings()
+    print(f"Split into {len(chunks)} chunks")
 
-    db = FAISS.from_documents(chunks, embeddings)
+    return chunks
 
-    db.save_local(VECTOR_DB_PATH)
+def ingest():
+    documents = load_documents()
+    chunks = chunk_documents(documents)
+    vectorstore = get_vectorstore()
+    add_documents(vectorstore, chunks)
 
 
-if __name__ == "__main__":
-    build_vectorstore()

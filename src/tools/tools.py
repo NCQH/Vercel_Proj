@@ -57,16 +57,30 @@ def execute_tool(name: str, args: dict) -> str:
         return f"Tool '{name}' does not exist"
     return tool["fn"](**args)
 
-from src.rag.qa import build_qa
+from src.rag.retriever import retrieve_dense, retrieve_hybrid, retrieve_sparse
 
-qa_chain = build_qa()
+def search_course_material(query: str, mode: str = "hybrid"):
+    if mode == "dense":
+        chunks = retrieve_dense(query)
 
+    elif mode == "sparse":
+        chunks = retrieve_sparse(query)
 
-def search_course_material(question: str):
-    result = qa_chain.invoke({"input": question})
-    return result["answer"]
+    elif mode == "hybrid":
+        chunks = retrieve_hybrid(query)
 
-# Tool registry - the agent uses this dict
+    else:
+        chunks = retrieve_dense(query)
+
+    return [
+        {
+            "text": c["text"],
+            "source": c["metadata"].get("source"),
+            "score": c["score"]
+        }
+        for c in chunks
+    ]
+
 TOOLS = {
     "search_web": {
         "fn": search_web,
@@ -83,4 +97,10 @@ TOOLS = {
         "description": "Fetch content from a URL",
         "parameters": {"url": "string"},
     },
+    "search_course_material": {
+        "fn": search_course_material,
+        "description": "Search for relevant information in the course materials",
+        "parameters": {"query": "string", "mode": "string (dense | sparse | hybrid, default: hybrid)"},
+    },
 }
+

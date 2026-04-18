@@ -76,7 +76,7 @@ Chức năng:
 
 Công nghệ:
 
-- FAISS
+- ChromaDB
 
 ---
 
