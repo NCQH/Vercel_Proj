@@ -22,6 +22,8 @@ Ghi lại các quyết định kỹ thuật, phân công, và brainstorming củ
 
 ### Quyết định kỹ thuật
 **LLM sử dụng**
-    - Sử dụng gpt-4o-mini thông qua endpoint github
+    ~~- Sử dụng gpt-4o-mini thông qua endpoint github~~
+    - Sử dụng gpt-4o-mini thông qua openai
     - Backup sử dụng gemini-3.1-flash-lite-preview
     - Backup 1 LLM chạy local (chưa chọn)
+**Sử dụng vector database ChromaDB**

@@ -1,7 +1,6 @@
 # Environment
 .env
 envs/
-.gitignore
 .vscode/
 # Python
 __pycache__/
@@ -21,3 +20,14 @@ build/
 .ai-log/*.jsonl
 JOURNAL_template.md
 WORKLOG_template.md
+
+.claude/settings.json
+.codex/hooks.json
+.cursor/hooks.json
+.gemini/settings.json
+.github/hooks/hooks.json
+
+scripts/
+.gitignore
+chroma_db/
+memory_db/

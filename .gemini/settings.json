@@ -32,7 +32,7 @@
           {
             "name": "log-session-end",
             "type": "command",
-            "command": "AI_TOOL_NAME=gemini python3 scripts/log_hook.py",
+            "command": "AI_TOOL_NAME=gemini python scripts/log_hook.py",
             "timeout": 10000
           }
         ]
