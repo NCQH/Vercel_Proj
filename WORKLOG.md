@@ -27,3 +27,9 @@ Ghi lại các quyết định kỹ thuật, phân công, và brainstorming củ
     - Backup sử dụng gemini-3.1-flash-lite-preview
     - Backup 1 LLM chạy local (chưa chọn)
 **Sử dụng vector database ChromaDB**
+**Dự kiến**
+- Code theo Langgraph
+- Sử dụng multiagent
+    - 1 agent gọi tool (dùng local llm để giảm chi phí)
+    - 1 agent retriever
+    - ...
