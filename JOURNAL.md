@@ -13,7 +13,9 @@ Hiện tại
     - RAG
     - ChromaDB
     - 1 agent retriever, gọi tool và trả về câu trả lời
-- UI (ReactJS)
+- UI (ReactJS) 
+[Student UI](docs/screenshoots/role_student_ui.jpeg)
+[Lecture UI](docs/screenshoots/role_lecture_ui.jpeg)
 
 Dự kiến
 **25/4/2026**
