@@ -11,6 +11,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 DOCUMENT_PATH = "data/documents"
 CHROMA_DB_DIR = "chroma_db"
+CHROMA_TENANT = os.getenv("CHROMA_TENANT", "default_tenant")
+CHROMA_DATABASE = os.getenv("CHROMA_DATABASE", "default_database")
+CHROMA_API_KEY = os.getenv("CHROMA_API_KEY")
 
 CHUNK_SIZE = 400       # tokens (ước lượng bằng số ký tự / 4)
 CHUNK_OVERLAP = 80 

@@ -1,4 +1,4 @@
-import chromadb
+import os
 from pathlib import Path
 import hashlib
 import json
@@ -9,11 +9,16 @@ from src.rag.embedding import get_embedding
 embedding_model = get_embedding()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MEMORY_DB_PATH = str(PROJECT_ROOT / "memory_db")
-CONVERSATION_PATH = PROJECT_ROOT / "memory_db" / "conversation_history.jsonl"
-SUMMARY_PATH = PROJECT_ROOT / "memory_db" / "session_summaries.json"
+if os.environ.get("VERCEL"):
+    MEMORY_DB_PATH = "/tmp/memory_db"
+else:
+    MEMORY_DB_PATH = str(PROJECT_ROOT / "memory_db")
 
-client = chromadb.PersistentClient(path=MEMORY_DB_PATH)
+CONVERSATION_PATH = Path(MEMORY_DB_PATH) / "conversation_history.jsonl"
+SUMMARY_PATH = Path(MEMORY_DB_PATH) / "session_summaries.json"
+
+from src.rag.vectorstore import get_chroma_client
+client = get_chroma_client()
 
 memory_col = client.get_or_create_collection("user_memory")
 
