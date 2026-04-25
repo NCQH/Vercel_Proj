@@ -8,26 +8,9 @@ import MainLayout from "../app-shell/MainLayout";
 const initialMessages = [
   {
     id: "1",
-    role: "user",
-    text: "Can you explain the difference between formative assessment and summative assessment?",
-  },
-  {
-    id: "2",
     role: "assistant",
-    text: "Formative assessment supports learning with ongoing feedback during a course, while summative assessment evaluates performance at the end of a module. Use formative checks to adjust learning and summative tasks to certify mastery.",
-    citations: ["Slide 12", "Page 45"],
-  },
-  {
-    id: "3",
-    role: "user",
-    text: "What should I review before the next lecture on macroeconomics?",
-  },
-  {
-    id: "4",
-    role: "assistant",
-    text: "Review the key definitions for GDP, inflation, and monetary policy. Pay special attention to the example in lecture 03 and the 02:15 case study.",
-    citations: ["Lecture 03", "02:15 timestamp"],
-  },
+    text: "Hello! I am your AI Teaching Assistant. How can I help you today?",
+  }
 ];
 
 const roadmapItems = [
@@ -42,47 +25,61 @@ export default function StudentChat() {
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
 
-  useEffect(() => {
-    const timer = setTimeout(
-      () => {
-        if (isSending) {
-          setMessages((current) => [
-            ...current,
-            {
-              id: String(current.length + 1),
-              role: "assistant",
-              text: "Great question! I recommend reviewing the previous module summary and focusing on the example citations in your study notes.",
-              citations: ["Summary page", "Slide 07"],
-            },
-          ]);
-          setIsSending(false);
-          setDraft("");
-        }
-      },
-      isSending ? 700 : 0,
-    );
-
-    return () => clearTimeout(timer);
-  }, [isSending]);
-
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!draft.trim()) {
-      return;
-    }
+    if (!draft.trim() || isSending) return;
 
+    const userMessage = draft.trim();
+    
+    // 1. Thêm tin nhắn của User vào UI ngay lập tức
     setMessages((current) => [
       ...current,
-      { id: String(current.length + 1), role: "user", text: draft.trim() },
+      { id: String(current.length + 1), role: "user", text: userMessage },
     ]);
     setIsSending(true);
+    setDraft("");
+
+    try {
+      // 2. Gửi HTTP POST request tới endpoint /api/chat của Next.js (sẽ được rewrite sang Python)
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMessage, user_id: "student_web_1" }),
+      });
+
+      if (!response.ok) throw new Error("Failed to connect to backend");
+
+      const data = await response.json();
+
+      // 3. Hiển thị phản hồi từ AI
+      setMessages((current) => [
+        ...current,
+        {
+          id: String(current.length + 1),
+          role: "assistant",
+          text: data.reply || "Agent did not return a response.",
+        },
+      ]);
+    } catch (error) {
+      console.error(error);
+      setMessages((current) => [
+        ...current,
+        {
+          id: String(current.length + 1),
+          role: "assistant",
+          text: "Lỗi kết nối tới Agent API. Vui lòng kiểm tra lại server.",
+        },
+      ]);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   return (
     <MainLayout role="student">
-      <section className="grid gap-6 xl:grid-cols-[1.45fr_0.9fr]">
-        <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft">
-          <div className="mb-6 flex items-start justify-between gap-4">
+      <section className="grid gap-6 xl:grid-cols-[1.45fr_0.9fr] h-[calc(100vh-150px)]">
+        <div className="flex flex-col rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft h-full overflow-hidden">
+          <div className="mb-6 flex shrink-0 items-start justify-between gap-4">
             <div>
               <p className="text-sm uppercase tracking-[0.24em] text-brand-600">
                 Student Chat
@@ -96,7 +93,7 @@ export default function StudentChat() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-4">
+          <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-2 min-h-0">
             {messages.map((message) => (
               <ChatBubble
                 key={message.id}
@@ -109,7 +106,7 @@ export default function StudentChat() {
 
           <form
             onSubmit={handleSubmit}
-            className="mt-6 rounded-[2rem] border border-slate-200 bg-slate-50 p-4 shadow-sm"
+            className="mt-6 shrink-0 rounded-[2rem] border border-slate-200 bg-slate-50 p-4 shadow-sm"
           >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <label className="flex-1">
@@ -143,7 +140,7 @@ export default function StudentChat() {
           </form>
         </div>
 
-        <aside className="space-y-6">
+        <aside className="space-y-6 overflow-y-auto h-full pr-2">
           <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft">
             <div className="flex items-center justify-between gap-4">
               <div>
