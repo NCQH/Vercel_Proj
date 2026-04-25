@@ -1,12 +1,12 @@
 import chromadb
-from sentence_transformers import SentenceTransformer
 from pathlib import Path
 import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from src.rag.embedding import get_embedding
 
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+embedding_model = get_embedding()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MEMORY_DB_PATH = str(PROJECT_ROOT / "memory_db")
@@ -23,6 +23,12 @@ def _stable_memory_id(user_id: str, text: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def get_emb(text: str) -> List[float]:
+    if hasattr(embedding_model, "embed_query"):
+        return embedding_model.embed_query(text)
+    else:
+        return embedding_model.encode(text).tolist()
+
 def add_memory(
     user_id: str,
     text: str,
@@ -31,7 +37,7 @@ def add_memory(
     confidence: float = 0.8,
     tags: Optional[List[str]] = None,
 ):
-    embedding = embedding_model.encode(text).tolist()
+    embedding = get_emb(text)
     metadata = {
         "user_id": user_id,
         "memory_type": memory_type,
@@ -55,7 +61,7 @@ def query_memory(
     top_k: int = 5,
     max_distance: Optional[float] = None,
 ) -> List[str]:
-    q_emb = embedding_model.encode(query).tolist()
+    q_emb = get_emb(query)
 
     res = memory_col.query(
         query_embeddings=[q_emb],
@@ -85,7 +91,7 @@ def query_memory_records(
     top_k: int = 5,
     max_distance: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
-    q_emb = embedding_model.encode(query).tolist()
+    q_emb = get_emb(query)
 
     res = memory_col.query(
         query_embeddings=[q_emb],
