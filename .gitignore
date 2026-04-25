@@ -1,6 +1,6 @@
 # Environment
 .env
-envs/
+env/
 .vscode/
 # Python
 __pycache__/
@@ -25,11 +25,11 @@ node_modules/
 JOURNAL_template.md
 WORKLOG_template.md
 
-.claude/settings.json
-.codex/hooks.json
-.cursor/hooks.json
-.gemini/settings.json
-.github/hooks/hooks.json
+.claude/
+.codex/
+.cursor/
+.gemini/
+.github/
 
 scripts/
 .gitignore

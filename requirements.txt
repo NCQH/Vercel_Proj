@@ -11,3 +11,5 @@ pymupdf
 python-dotenv
 openai
 tiktoken
+fastapi
+uvicorn
