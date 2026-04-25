@@ -1,5 +1,4 @@
 from langchain_openai import OpenAIEmbeddings
-from sentence_transformers import SentenceTransformer
 
 def get_embedding():
     try:
@@ -13,4 +12,5 @@ def get_embedding():
         print(f"Error occurred while initializing OpenAIEmbeddings: {e}")
         # Fallback to SentenceTransformer
         print("Falling back to SentenceTransformer.")
+        from sentence_transformers import SentenceTransformer
         return SentenceTransformer('all-MiniLM-L6-v2')
