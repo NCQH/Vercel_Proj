@@ -7,7 +7,7 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: isDev ? 'http://127.0.0.1:8000/api/:path*' : '/api/:path*',
+        destination: process.env.VERCEL ? '/api/:path*' : 'http://127.0.0.1:8000/api/:path*',
       },
     ];
   },

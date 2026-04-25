@@ -5,7 +5,14 @@ import { Paperclip, Send, Sparkles, BookOpen } from "lucide-react";
 import ChatBubble from "../ui/ChatBubble";
 import MainLayout from "../app-shell/MainLayout";
 
-const initialMessages = [
+type Message = {
+  id: string;
+  role: string;
+  text: string;
+  citations?: any[];
+};
+
+const initialMessages: Message[] = [
   {
     id: "1",
     role: "assistant",
