@@ -181,14 +181,17 @@ def retrieve_hybrid(
 
     return scored[:top_k]
 
-from sentence_transformers import CrossEncoder
-from typing import List, Dict, Any
 import numpy as np
 
-RERANK_MODEL = CrossEncoder(
-    "cross-encoder/ms-marco-MiniLM-L-6-v2",
-    device="cpu"  # hoặc cuda
-)
+try:
+    from sentence_transformers import CrossEncoder
+    RERANK_MODEL = CrossEncoder(
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        device="cpu"  # hoặc cuda
+    )
+except ImportError:
+    RERANK_MODEL = None
+    print("Warning: sentence_transformers not installed. Reranking will be disabled.")
 
 def mmr(doc_scores, embeddings, lambda_param=0.5, top_k=5):
     """
@@ -237,6 +240,10 @@ def rerank(
 
     if not candidates:
         return []
+
+    if RERANK_MODEL is None:
+        print("RERANK_MODEL is not available. Skipping reranking.")
+        return candidates[:top_k]
 
     pairs = [[query, c["text"]] for c in candidates]
 
