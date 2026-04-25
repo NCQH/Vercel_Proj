@@ -10,7 +10,7 @@ def get_chroma_client():
         return chromadb.CloudClient(
             tenant=CHROMA_TENANT,
             database=CHROMA_DATABASE,
-            cloud_credentials=CHROMA_API_KEY
+            api_key=CHROMA_API_KEY
         )
     else:
         # Fallback to local
