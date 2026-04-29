@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import { Paperclip, Send, Sparkles, BookOpen } from "lucide-react";
 import ChatBubble from "../ui/ChatBubble";
 import MainLayout from "../app-shell/MainLayout";
@@ -28,12 +29,21 @@ const roadmapItems = [
 ];
 
 export default function StudentChat() {
+  const { data: session } = useSession();
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Hàm gửi tin nhắn (dùng chung cho cả form submit và Enter key)
+  const send = async () => {
     if (!draft.trim() || isSending) return;
 
     const userMessage = draft.trim();
@@ -47,11 +57,11 @@ export default function StudentChat() {
     setDraft("");
 
     try {
-      // 2. Gửi HTTP POST request tới endpoint /api/chat của Next.js (sẽ được rewrite sang Python)
+      const identity = session?.user?.email || session?.user?.name || "anonymous_user";
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMessage, user_id: "student_web_1" }),
+        body: JSON.stringify({ message: userMessage, user_id: identity }),
       });
 
       if (!response.ok) throw new Error("Failed to connect to backend");
@@ -82,6 +92,69 @@ export default function StudentChat() {
     }
   };
 
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    send();
+  };
+
+  // Nhấn Enter → gửi tin nhắn, Shift+Enter → xuống dòng
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      send();
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || isUploading) return;
+
+    const identity = session?.user?.email || session?.user?.name || "";
+    if (!identity) {
+      setMessages((current) => [
+        ...current,
+        { id: String(current.length + 1), role: "assistant", text: "Bạn cần đăng nhập trước khi tải file." },
+      ]);
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("user_id", identity);
+
+      const response = await fetch("http://127.0.0.1:8000/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error("Upload failed");
+      const result = await response.json();
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: String(current.length + 1),
+          role: "assistant",
+          text: `Đã tải lên: ${result.filename} (${Math.round(result.size / 1024)} KB).`,
+        },
+      ]);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: String(current.length + 1),
+          role: "assistant",
+          text: "Tải file thất bại. Vui lòng thử lại.",
+        },
+      ]);
+    } finally {
+      setIsUploading(false);
+      if (event.target) event.target.value = "";
+    }
+  };
+
   return (
     <MainLayout role="student">
       <section className="grid gap-6 xl:grid-cols-[1.45fr_0.9fr] h-[calc(100vh-150px)]">
@@ -109,6 +182,7 @@ export default function StudentChat() {
                 citations={message.citations}
               />
             ))}
+            <div ref={messagesEndRef} />
           </div>
 
           <form
@@ -121,6 +195,7 @@ export default function StudentChat() {
                 <textarea
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={handleKeyDown}
                   rows={2}
                   placeholder="Ask a question or attach a file for context..."
                   className="min-h-[96px] w-full resize-none rounded-3xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
@@ -129,11 +204,20 @@ export default function StudentChat() {
               <div className="flex shrink-0 flex-col items-stretch gap-3 sm:w-64">
                 <button
                   type="button"
-                  className="inline-flex items-center justify-center gap-2 rounded-3xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className="inline-flex items-center justify-center gap-2 rounded-3xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Paperclip className="h-4 w-4" />
-                  Attach
+                  {isUploading ? "Uploading…" : "Attach"}
                 </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.txt,.md,.doc,.docx"
+                  onChange={handleFileUpload}
+                />
                 <button
                   type="submit"
                   disabled={isSending}

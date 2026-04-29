@@ -1,5 +1,2 @@
-from agents.reasoning_agent import run
-
-def reasoning_node(state):
-    answer = run(state["question"], state["retrieved_docs"])
-    return {"answer": answer}
+# This node has been replaced by the LangGraph implementation.
+# See: agent_node.py (LLM reasoning is now handled by ChatOpenAI with bound tools)

@@ -1,244 +1,89 @@
 """
-Basic agent loop using the OpenAI API.
-Receives user input, calls tools as needed, and returns results.
+AI Teaching Assistant — LangGraph-powered agent.
+
+This module provides `run_agent()` which invokes the compiled LangGraph
+and returns the final assistant reply with appended sources.
+
+The interactive CLI (`main()`) is preserved for local testing.
 """
 
 import logging
-import json
-from openai import OpenAI
 
-from src.config import (
-    DEFAULT_MODEL,
-    LOG_LEVEL,
-    MEMORY_CONTEXT_TURNS,
-    MEMORY_FACT_MAX_DISTANCE,
-    MEMORY_FACT_TOP_K,
-    MEMORY_SUMMARY_MODEL,
-    MEMORY_SUMMARY_TURNS,
-    OPENAI_API_KEY,
-)
-from src.tools.tools import get_tool_schemas, execute_tool
+from langchain_core.messages import HumanMessage
 
-# MEMORY (NEW)
-from src.memory.memory_service import (
-    debug_memory_recall,
-    load_context_messages,
-    load_memory,
-    load_session_context_summary,
-    refresh_session_summary,
-    refresh_session_summary_with_llm,
-    save_conversation_turn,
-    save_memory,
-)
+from src.config import LOG_LEVEL
+from src.graph.builder import graph
+from src.memory.memory_service import debug_memory_recall
+from src.config import MEMORY_FACT_MAX_DISTANCE, MEMORY_FACT_TOP_K
 
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def _extract_sources_from_tool_result(result):
-    sources = []
+# ------------------------------------------------------------------
+# Public API
+# ------------------------------------------------------------------
 
-    if isinstance(result, list):
-        for item in result:
-            if isinstance(item, dict):
-                source = item.get("source")
-                if source:
-                    sources.append(str(source))
-            elif isinstance(item, str) and item.strip():
-                sources.append(item.strip())
-
-    elif isinstance(result, dict):
-        source = result.get("source")
-        if source:
-            sources.append(str(source))
-
-    unique_sources = []
-    seen = set()
-    for source in sources:
-        cleaned = source.strip()
-        if not cleaned or cleaned in seen:
-            continue
-        seen.add(cleaned)
-        unique_sources.append(cleaned)
-
-    return unique_sources
-
-
-def _append_sources_if_missing(answer: str, sources):
-    if not sources:
-        return answer
-
-    if "sources:" in answer.lower():
-        return answer
-
-    source_block = "\nSources:\n" + "\n".join(f"- {source}" for source in sources)
-    return answer.rstrip() + source_block
-
-
-SYSTEM_PROMPT = """
-You are an AI Teaching Assistant.
-
-You MUST use the tool `search_course_material` before answering any question related to:
-- lectures
-- course content
-- documents
-- definitions in the syllabus
-
-Tool usage rules:
-- Always call tool first if question is academic/content-based
-- If tool returns multiple chunks, synthesize them
-- If tool returns empty, say you don't know
-
-You are not allowed to answer from memory for course-related questions.
-
-Output format:
-Answer: ...
-Sources:
-- source1
-- source2
-"""
-
-
-def create_agent():
-    """Create OpenAI client"""
-    if not OPENAI_API_KEY:
-        raise ValueError("OPENAI_API_KEY is not configured.")
-    return OpenAI(api_key=OPENAI_API_KEY)
-
-
-def run_agent_loop(
-    client: OpenAI,
+def run_agent(
     user_input: str,
     user_id: str = "default",
     session_id: str = "default",
-    max_turns: int = 10
 ) -> str:
-
     """
-    Agent loop with tool calling + memory
+    Run the LangGraph agent and return the final answer string.
+
+    Args:
+        user_input:  The user's question.
+        user_id:     Identifies the user for memory.
+        session_id:  Groups turns within a session.
+
+    Returns:
+        The assistant's final response (with sources appended if any).
     """
 
-    # -----------------------
-    # 0. LOAD MEMORY (NEW)
-    # -----------------------
-    memory = load_memory(
-        user_id,
-        user_input,
-        top_k=MEMORY_FACT_TOP_K,
-        max_distance=MEMORY_FACT_MAX_DISTANCE,
-    ) or []
-    context_messages = load_context_messages(
-        user_id,
-        max_turns=MEMORY_CONTEXT_TURNS,
-    ) or []
-    session_summary = load_session_context_summary(user_id)
+    initial_state = {
+        "messages": [HumanMessage(content=user_input)],
+        "user_id": user_id,
+        "session_id": session_id,
+        "sources": [],
+        "memory_block": "",
+        "summary_block": "",
+        "route": "",
+        "route_reason": "",
+        "retrieved_chunks": [],
+        "final_answer": "",
+    }
 
-    memory_block = ""
-    if memory:
-        memory_block = "\nUser Memory:\n" + "\n".join(f"- {m}" for m in memory)
+    # Invoke the compiled LangGraph (recursion_limit acts as max_turns)
+    result = graph.invoke(initial_state, {"recursion_limit": 25})
 
-    summary_block = ""
-    if session_summary:
-        summary_block = f"\nSession Summary:\n{session_summary}"
+    # Extract the final assistant message
+    final_answer = ""
+    for msg in reversed(result["messages"]):
+        if msg.type == "ai" and not getattr(msg, "tool_calls", None):
+            final_answer = msg.content or ""
+            break
 
-    # -----------------------
-    # SYSTEM PROMPT (ENHANCED)
-    # -----------------------
-    system_prompt = SYSTEM_PROMPT + f"\n{memory_block}{summary_block}"
+    # Append sources if the model didn't include them
+    sources = result.get("sources", [])
+    if sources and "sources:" not in final_answer.lower():
+        source_block = "\nSources:\n" + "\n".join(f"- {s}" for s in sources)
+        final_answer = final_answer.rstrip() + source_block
 
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(context_messages)
-    messages.append({"role": "user", "content": user_input})
+    return final_answer
 
-    tools = get_tool_schemas()
 
-    # -----------------------
-    # AGENT LOOP
-    # -----------------------
-    collected_sources = []
-    for turn in range(max_turns):
-
-        logger.info(f"Turn {turn + 1}/{max_turns}")
-        logger.info(f"[MEMORY INPUT] {memory}")
-        logger.info(f"[CONTEXT INPUT] loaded {len(context_messages)} messages")
-        logger.info(f"[SUMMARY INPUT] loaded {1 if session_summary else 0} summary block")
-        response = client.chat.completions.create(
-            model=DEFAULT_MODEL,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-        )
-
-        message = response.choices[0].message
-
-        # -----------------------
-        # STOP CONDITION
-        # -----------------------
-        if not message.tool_calls:
-
-            final_answer = message.content or ""
-
-            # -----------------------
-            # SAVE MEMORY (FIXED)
-            # -----------------------
-            saved_count = save_memory(user_id, user_input)
-            logger.info(f"[MEMORY SAVE] saved {saved_count} items")
-            save_conversation_turn(
-                user_id,
-                user_input,
-                str(final_answer),
-                session_id=session_id,
-            )
-            logger.info("[CONTEXT SAVE] saved 1 turn")
-            summary = refresh_session_summary_with_llm(
-                client,
-                user_id,
-                model=MEMORY_SUMMARY_MODEL,
-                max_turns_for_summary=MEMORY_SUMMARY_TURNS,
-            )
-            logger.info(f"[SUMMARY SAVE] length {len(summary)}")
-
-            return _append_sources_if_missing(final_answer, collected_sources)
-
-        # -----------------------
-        # ADD ASSISTANT MESSAGE
-        # -----------------------
-        messages.append(message)
-
-        # -----------------------
-        # TOOL EXECUTION
-        # -----------------------
-        for tool_call in message.tool_calls:
-
-            name = tool_call.function.name
-            args = json.loads(tool_call.function.arguments)
-
-            logger.info(f"Tool: {name}({args})")
-
-            result = execute_tool(name, args)
-
-            logger.info(f"Result: {str(result)[:200]}")
-
-            if name == "search_course_material":
-                collected_sources.extend(_extract_sources_from_tool_result(result))
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": json.dumps(result, ensure_ascii=False),
-            })
-
-    return _append_sources_if_missing("Agent reached maximum number of turns.", collected_sources)
-
+# ------------------------------------------------------------------
+# Interactive CLI (local testing)
+# ------------------------------------------------------------------
 
 def main():
-    """Interactive CLI"""
+    """Interactive CLI for testing the LangGraph agent."""
 
-    client = create_agent()
     user_id = input("User ID (default: default): ").strip() or "default"
     session_id = input("Session ID (default: auto): ").strip() or "cli"
 
-    print("Agentic App (type 'quit' to exit)")
+    print("LangGraph Agent (type 'quit' to exit)")
     print("-" * 50)
 
     while True:
@@ -273,8 +118,7 @@ def main():
             continue
 
         try:
-            response = run_agent_loop(
-                client,
+            response = run_agent(
                 user_input,
                 user_id=user_id,
                 session_id=session_id,

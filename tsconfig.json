@@ -35,6 +35,15 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "env",
+    "chroma_db",
+    "memory_db",
+    "data",
+    "api",
+    "src",
+    "scripts",
+    "reports",
+    "docs"
   ]
 }

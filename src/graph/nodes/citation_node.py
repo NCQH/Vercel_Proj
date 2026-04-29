@@ -1,5 +1,2 @@
-from agents.citation_agent import run
-
-def citation_node(state):
-    citations = run(state["retrieved_docs"])
-    return {"citations": citations}
+# This node has been replaced by the LangGraph implementation.
+# Citations are now extracted in save_memory_node.py from tool message results.

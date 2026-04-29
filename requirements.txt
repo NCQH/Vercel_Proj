@@ -6,6 +6,7 @@ pydantic>=2.0.0
 fastapi
 uvicorn
 langchain
+langgraph
 langchain-community
 langchain-openai
 langchain-chroma
