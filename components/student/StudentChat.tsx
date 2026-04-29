@@ -124,7 +124,7 @@ export default function StudentChat() {
       formData.append("file", file);
       formData.append("user_id", identity);
 
-      const response = await fetch("http://127.0.0.1:8000/api/upload", {
+      const response = await fetch("/api/upload", {
         method: "POST",
         body: formData,
       });
