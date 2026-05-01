@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Menu,
-  LogOut,
   MessageSquare,
   BookOpen,
   BarChart3,
@@ -22,6 +21,7 @@ const navGroups = {
   student: [
     { label: "Chat", href: "/student/chat", icon: MessageSquare },
     { label: "Roadmap", href: "/student/roadmap", icon: BookOpen },
+    { label: "Materials", href: "/student/materials", icon: FileText },
   ],
   lecturer: [
     { label: "Dashboard", href: "/lecturer/dashboard", icon: BarChart3 },
@@ -108,15 +108,7 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
-                <button className="hidden rounded-2xl bg-slate-100 px-4 py-2 text-sm text-slate-700 transition hover:bg-slate-200 lg:inline-flex">
-                  Courses
-                </button>
-                <button className="inline-flex items-center gap-2 rounded-2xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
-                  <LogOut className="h-4 w-4" />
-                  Logout
-                </button>
-              </div>
+              <div className="flex items-center gap-3" />
             </div>
           </header>
 

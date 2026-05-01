@@ -11,7 +11,7 @@ from src.memory.memory_service import load_memory, save_memory
 
 load_dotenv()  # Load environment variables from .env file
 
-def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any]]:
+def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "default") -> List[Dict[str, Any]]:
     """
     Dense retrieval: tìm kiếm theo embedding similarity trong ChromaDB.
 
@@ -26,7 +26,7 @@ def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any]
           - "score": cosine similarity score
     """
 
-    vectorstore = get_vectorstore()
+    vectorstore = get_vectorstore(user_id=user_id)
     results = vectorstore.similarity_search_with_score(
         query,
         k=top_k
@@ -74,19 +74,26 @@ def build_bm25_index(docs: List[Dict[str, Any]]):
     BM25_INDEX = BM25Okapi(tokenized_corpus)
 
 
-def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any]]:
+def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "default") -> List[Dict[str, Any]]:
     """
-    BM25 sparse retrieval (keyword-based search)
+    BM25 sparse retrieval (keyword-based search) scoped to a single user collection.
     """
 
-    if BM25_INDEX is None:
+    vectorstore = get_vectorstore(user_id=user_id)
+    raw = vectorstore.get(include=["documents", "metadatas"])
+    docs = raw.get("documents") or []
+    metas = raw.get("metadatas") or []
+
+    if not docs:
         return []
 
     tokenized_query = tokenize(query)
     if not tokenized_query:
         return []
 
-    scores = BM25_INDEX.get_scores(tokenized_query)
+    tokenized_corpus = [tokenize(doc) for doc in docs]
+    bm25 = BM25Okapi(tokenized_corpus)
+    scores = bm25.get_scores(tokenized_query)
 
     top_indices = sorted(
         range(len(scores)),
@@ -95,11 +102,10 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any
     )[:top_k]
 
     results: List[Dict[str, Any]] = []
-
     for idx in top_indices:
         results.append({
-            "text": BM25_DOCS[idx],
-            "metadata": BM25_METADATA[idx] or {},
+            "text": docs[idx],
+            "metadata": metas[idx] if idx < len(metas) else {},
             "score": float(scores[idx])
         })
 
@@ -129,14 +135,15 @@ def build_doc_key(chunk: Dict[str, Any]) -> str:
 
 def retrieve_hybrid(
     query: str,
-    top_k: int = TOP_K_SEARCH
+    top_k: int = TOP_K_SEARCH,
+    user_id: str = "default"
 ) -> List[Dict[str, Any]]:
     """
     Hybrid retrieval using Reciprocal Rank Fusion (RRF)
     """
 
-    dense_results = retrieve_dense(query, top_k=top_k * 2)
-    sparse_results = retrieve_sparse(query, top_k=top_k * 2)
+    dense_results = retrieve_dense(query, top_k=top_k * 2, user_id=user_id)
+    sparse_results = retrieve_sparse(query, top_k=top_k * 2, user_id=user_id)
 
     merged = {}
 
@@ -462,13 +469,13 @@ def rag_answer(
     # 1. RETRIEVE
     # -----------------------
     if retrieval_mode == "dense":
-        candidates = retrieve_dense(query, top_k_search)
+        candidates = retrieve_dense(query, top_k_search, user_id=user_id)
 
     elif retrieval_mode == "sparse":
-        candidates = retrieve_sparse(query, top_k_search)
+        candidates = retrieve_sparse(query, top_k_search, user_id=user_id)
 
     elif retrieval_mode == "hybrid":
-        candidates = retrieve_hybrid(query, top_k_search)
+        candidates = retrieve_hybrid(query, top_k_search, user_id=user_id)
 
     else:
         raise ValueError("Invalid retrieval_mode")

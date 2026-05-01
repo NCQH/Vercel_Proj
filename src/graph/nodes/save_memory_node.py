@@ -62,8 +62,8 @@ def save_memory_node(state: AgentState) -> dict:
             user_input = msg.content
             break
 
-    # 1. Save long-term facts
-    saved_count = save_memory(user_id, user_input)
+    # 1. Save typed durable memory (semantic + episodic)
+    saved_count = save_memory(user_id, user_input, session_id=session_id)
     logger.info("[MEMORY SAVE] saved %d items", saved_count)
 
     # 2. Save conversation turn
@@ -81,6 +81,7 @@ def save_memory_node(state: AgentState) -> dict:
         client,
         user_id,
         model=MEMORY_SUMMARY_MODEL,
+        session_id=session_id,
         max_turns_for_summary=MEMORY_SUMMARY_TURNS,
     )
     logger.info("[SUMMARY SAVE] length %d", len(summary))

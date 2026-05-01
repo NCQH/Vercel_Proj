@@ -13,13 +13,17 @@ from langchain_core.messages import SystemMessage
 from src.config import (
     MEMORY_CONTEXT_TURNS,
     MEMORY_FACT_MAX_DISTANCE,
-    MEMORY_FACT_TOP_K,
+    MEMORY_EPISODIC_TOP_K,
+    MEMORY_LONG_TERM_TOP_K,
+    MEMORY_SEMANTIC_TOP_K,
 )
 from src.graph.state import AgentState
 from src.memory.memory_service import (
-    load_context_messages,
-    load_memory,
+    load_episodic_memory,
+    load_long_term_memory,
+    load_semantic_memory,
     load_session_context_summary,
+    load_short_term_memory,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,51 +53,77 @@ Sources:
 
 
 def load_memory_node(state: AgentState) -> dict:
-    """Fetch memory + session summary and prepend a system message."""
+    """Fetch typed memory layers and prepend a memory-enriched system message."""
 
     user_id = state["user_id"]
-    # Extract user's latest message text for memory query
+    session_id = state.get("session_id", "default")
+
     user_input = ""
     for msg in reversed(state["messages"]):
         if msg.type == "human":
             user_input = msg.content
             break
 
-    # --- Long-term memory ---
-    memory = load_memory(
+    semantic_mem = load_semantic_memory(
         user_id,
         user_input,
-        top_k=MEMORY_FACT_TOP_K,
+        top_k=MEMORY_SEMANTIC_TOP_K,
         max_distance=MEMORY_FACT_MAX_DISTANCE,
     ) or []
 
-    memory_block = ""
-    if memory:
-        memory_block = "\nUser Memory:\n" + "\n".join(f"- {m}" for m in memory)
+    long_term_mem = load_long_term_memory(
+        user_id,
+        user_input,
+        top_k=MEMORY_LONG_TERM_TOP_K,
+        max_distance=MEMORY_FACT_MAX_DISTANCE,
+    ) or []
 
-    # --- Session summary ---
+    episodic_mem = load_episodic_memory(
+        user_id,
+        user_input,
+        session_id=session_id,
+        top_k=MEMORY_EPISODIC_TOP_K,
+        max_distance=MEMORY_FACT_MAX_DISTANCE,
+    ) or []
+
     session_summary = load_session_context_summary(user_id)
+    short_term_messages = load_short_term_memory(
+        user_id,
+        session_id=session_id,
+        max_turns=MEMORY_CONTEXT_TURNS,
+    ) or []
+
+    semantic_block = ""
+    if semantic_mem:
+        semantic_block = "\nSemantic Memory (User Profile):\n" + "\n".join(f"- {m}" for m in semantic_mem)
+
+    long_term_block = ""
+    if long_term_mem:
+        long_term_block = "\nLong-term Memory:\n" + "\n".join(f"- {m}" for m in long_term_mem)
+
+    episodic_block = ""
+    if episodic_mem:
+        episodic_block = "\nEpisodic Memory (Relevant Sessions):\n" + "\n".join(f"- {m}" for m in episodic_mem)
+
     summary_block = ""
     if session_summary:
         summary_block = f"\nSession Summary:\n{session_summary}"
 
-    # --- Context messages (recent conversation turns) ---
-    context_messages = load_context_messages(
-        user_id,
-        max_turns=MEMORY_CONTEXT_TURNS,
-    ) or []
+    logger.info(
+        "[MEMORY] semantic=%d long_term=%d episodic=%d short_turns=%d",
+        len(semantic_mem),
+        len(long_term_mem),
+        len(episodic_mem),
+        len(short_term_messages),
+    )
 
-    logger.info("[MEMORY] loaded %d facts, %d context turns", len(memory), len(context_messages))
-
-    # Build final system prompt
-    system_content = SYSTEM_PROMPT + f"\n{memory_block}{summary_block}"
+    system_content = SYSTEM_PROMPT + f"\n{semantic_block}{long_term_block}{episodic_block}{summary_block}"
     system_msg = SystemMessage(content=system_content)
 
-    # Rebuild messages: system → context history → current user message
     from langchain_core.messages import HumanMessage, AIMessage
 
     rebuilt: list = [system_msg]
-    for cm in context_messages:
+    for cm in short_term_messages:
         role = cm.get("role", "user")
         content = cm.get("content", "")
         if role == "user":
@@ -101,13 +131,16 @@ def load_memory_node(state: AgentState) -> dict:
         elif role == "assistant":
             rebuilt.append(AIMessage(content=content))
 
-    # Append the current user message (last human message from state)
     if user_input:
         rebuilt.append(HumanMessage(content=user_input))
 
+    combined_memory_block = "\n".join(
+        [b for b in [semantic_block, long_term_block, episodic_block] if b.strip()]
+    )
+
     return {
         "messages": rebuilt,
-        "memory_block": memory_block,
+        "memory_block": combined_memory_block,
         "summary_block": summary_block,
         "sources": [],
     }

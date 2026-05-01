@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { signOut, useSession } from "next-auth/react";
 import { Paperclip, Send, Sparkles, BookOpen } from "lucide-react";
 import ChatBubble from "../ui/ChatBubble";
 import MainLayout from "../app-shell/MainLayout";
@@ -11,6 +12,14 @@ type Message = {
   role: string;
   text: string;
   citations?: any[];
+};
+
+type UserProfile = {
+  full_name: string;
+  class_name: string;
+  email?: string;
+  image_url?: string;
+  onboarded?: boolean;
 };
 
 const initialMessages: Message[] = [
@@ -29,11 +38,16 @@ const roadmapItems = [
 ];
 
 export default function StudentChat() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  const router = useRouter();
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(true);
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -42,41 +56,171 @@ export default function StudentChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Hàm gửi tin nhắn (dùng chung cho cả form submit và Enter key)
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.replace("/login");
+    }
+  }, [status, router]);
+
+  useEffect(() => {
+    const loadProfile = async () => {
+      setIsProfileLoading(true);
+      try {
+        const response = await fetch("/api/users/me", { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (payload?.profile) {
+          setProfile(payload.profile);
+        }
+      } catch (error) {
+        console.error("Failed to load profile", error);
+      } finally {
+        setIsProfileLoading(false);
+      }
+    };
+
+    const loadHistory = async () => {
+      const identity =
+        (session?.user as { id?: string } | undefined)?.id ||
+        session?.user?.email ||
+        session?.user?.name ||
+        "";
+
+      if (!identity) return;
+
+      try {
+        const response = await fetch(
+          `/api/chat/history?user_id=${encodeURIComponent(identity)}&session_id=web_session&limit=30`,
+          { cache: "no-store" }
+        );
+        if (!response.ok) return;
+
+        const payload = await response.json();
+        const historyItems = (payload?.items || []) as Array<{ role?: string; content?: string }>;
+        if (!historyItems.length) return;
+
+        setMessages(
+          historyItems.map((item, idx) => ({
+            id: `h-${idx + 1}`,
+            role: item.role === "assistant" ? "assistant" : "user",
+            text: item.content || "",
+          }))
+        );
+      } catch (error) {
+        console.error("Failed to load chat history", error);
+      }
+    };
+
+    const bootstrap = async () => {
+      setIsBootstrapping(true);
+      try {
+        await Promise.all([loadProfile(), loadHistory()]);
+      } finally {
+        setIsBootstrapping(false);
+      }
+    };
+
+    if (status === "authenticated") {
+      bootstrap();
+    }
+  }, [status, session]);
+
+  // Shared send handler (used by both form submit and Enter key)
   const send = async () => {
     if (!draft.trim() || isSending) return;
 
     const userMessage = draft.trim();
-    
-    // 1. Thêm tin nhắn của User vào UI ngay lập tức
-    setMessages((current) => [
-      ...current,
-      { id: String(current.length + 1), role: "user", text: userMessage },
-    ]);
+
+    setMessages((current) => {
+      const userId = String(current.length + 1);
+      const assistantId = String(current.length + 2);
+      return [
+        ...current,
+        { id: userId, role: "user", text: userMessage },
+        { id: assistantId, role: "assistant", text: "Thinking..." },
+      ];
+    });
     setIsSending(true);
     setDraft("");
 
     try {
-      const identity = session?.user?.email || session?.user?.name || "anonymous_user";
-      const response = await fetch("/api/chat", {
+      const identity =
+        (session?.user as { id?: string } | undefined)?.id ||
+        session?.user?.email ||
+        session?.user?.name ||
+        "anonymous_user";
+      const response = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMessage, user_id: identity }),
       });
 
-      if (!response.ok) throw new Error("Failed to connect to backend");
+      if (!response.ok || !response.body) {
+        throw new Error("Failed to connect to backend stream");
+      }
 
-      const data = await response.json();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
 
-      // 3. Hiển thị phản hồi từ AI
-      setMessages((current) => [
-        ...current,
-        {
-          id: String(current.length + 1),
-          role: "assistant",
-          text: data.reply || "Agent did not return a response.",
-        },
-      ]);
+      let renderedText = "";
+      let pendingText = "";
+      let streamDone = false;
+
+      const flushTimer = setInterval(() => {
+        if (!pendingText.length) {
+          if (streamDone) clearInterval(flushTimer);
+          return;
+        }
+
+        const take = Math.min(4, pendingText.length);
+        renderedText += pendingText.slice(0, take);
+        pendingText = pendingText.slice(take);
+
+        setMessages((current) => {
+          const next = [...current];
+          const lastAssistantIndex = [...next]
+            .map((m, idx) => ({ m, idx }))
+            .reverse()
+            .find(({ m }) => m.role === "assistant")?.idx;
+
+          if (lastAssistantIndex === undefined) return current;
+          next[lastAssistantIndex] = {
+            ...next[lastAssistantIndex],
+            text: renderedText || "Agent is thinking...",
+          };
+          return next;
+        });
+      }, 28);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pendingText += decoder.decode(value, { stream: true });
+      }
+
+      pendingText += decoder.decode();
+      streamDone = true;
+
+      // Wait until flush loop empties pending buffer
+      while (pendingText.length > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      if (!renderedText.trim()) {
+        setMessages((current) => {
+          const next = [...current];
+          const lastAssistantIndex = [...next]
+            .map((m, idx) => ({ m, idx }))
+            .reverse()
+            .find(({ m }) => m.role === "assistant")?.idx;
+          if (lastAssistantIndex === undefined) return current;
+          next[lastAssistantIndex] = {
+            ...next[lastAssistantIndex],
+            text: "Agent did not return a response.",
+          };
+          return next;
+        });
+      }
     } catch (error) {
       console.error(error);
       setMessages((current) => [
@@ -84,7 +228,7 @@ export default function StudentChat() {
         {
           id: String(current.length + 1),
           role: "assistant",
-          text: "Lỗi kết nối tới Agent API. Vui lòng kiểm tra lại server.",
+          text: "Connection error to Agent API. Please check the server.",
         },
       ]);
     } finally {
@@ -97,7 +241,7 @@ export default function StudentChat() {
     send();
   };
 
-  // Nhấn Enter → gửi tin nhắn, Shift+Enter → xuống dòng
+  // Press Enter to send, Shift+Enter for a new line
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -113,7 +257,7 @@ export default function StudentChat() {
     if (!identity) {
       setMessages((current) => [
         ...current,
-        { id: String(current.length + 1), role: "assistant", text: "Bạn cần đăng nhập trước khi tải file." },
+        { id: String(current.length + 1), role: "assistant", text: "You need to sign in before uploading files." },
       ]);
       return;
     }
@@ -137,7 +281,7 @@ export default function StudentChat() {
         {
           id: String(current.length + 1),
           role: "assistant",
-          text: `Đã tải lên: ${result.filename} (${Math.round(result.size / 1024)} KB).`,
+          text: `Uploaded: ${result.filename} (${Math.round(result.size / 1024)} KB).`,
         },
       ]);
     } catch (error) {
@@ -146,7 +290,7 @@ export default function StudentChat() {
         {
           id: String(current.length + 1),
           role: "assistant",
-          text: "Tải file thất bại. Vui lòng thử lại.",
+          text: "File upload failed. Please try again.",
         },
       ]);
     } finally {
@@ -155,8 +299,92 @@ export default function StudentChat() {
     }
   };
 
+  if (status === "loading" || isBootstrapping) {
+    return (
+      <MainLayout role="student">
+        <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+          <p className="text-sm font-medium text-slate-600">Loading backend data...</p>
+        </div>
+      </MainLayout>
+    );
+  }
+
+  if (status === "unauthenticated") {
+    return (
+      <MainLayout role="student">
+        <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+          <p className="text-sm font-medium text-slate-600">Redirecting to login...</p>
+        </div>
+      </MainLayout>
+    );
+  }
+
   return (
     <MainLayout role="student">
+      <div className="fixed right-6 top-5 z-50">
+        <div className="relative">
+          <button
+            id="account-menu-toggle"
+            type="button"
+            onClick={() => setIsAccountMenuOpen((prev) => !prev)}
+            className="flex items-center rounded-full border border-slate-300 bg-white p-1.5 shadow-sm transition hover:shadow"
+          >
+            <div className="h-8 w-8 overflow-hidden rounded-full bg-brand-100 ring-1 ring-slate-200">
+              {(profile?.image_url || session?.user?.image) ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={profile?.image_url || session?.user?.image || ""}
+                  alt="User avatar"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-brand-700">
+                  {(profile?.full_name || session?.user?.name || "U").slice(0, 1).toUpperCase()}
+                </div>
+              )}
+            </div>
+          </button>
+
+          {isAccountMenuOpen ? (
+            <div className="absolute right-0 z-20 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Account</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">
+                {profile?.full_name || session?.user?.name || "Unknown User"}
+              </p>
+              <p className="text-xs text-slate-600">
+                {profile?.email || session?.user?.email || "No email"}
+              </p>
+
+              <div className="mt-4 grid gap-2 text-sm">
+                <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                  <span className="text-slate-500">Class</span>
+                  <span className="font-medium text-slate-900">
+                    {isProfileLoading ? "Loading..." : profile?.class_name || "Not set"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                  <span className="text-slate-500">Onboarding</span>
+                  <span className={`font-medium ${profile?.onboarded ? "text-emerald-700" : "text-amber-700"}`}>
+                    {profile?.onboarded ? "Completed" : "Pending"}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                id="logout-btn"
+                type="button"
+                onClick={() => signOut({ callbackUrl: "/login" })}
+                className="mt-4 w-full rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              >
+                Sign out
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
       <section className="grid gap-6 xl:grid-cols-[1.45fr_0.9fr] h-[calc(100vh-150px)]">
         <div className="flex flex-col rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft h-full overflow-hidden">
           <div className="mb-6 flex shrink-0 items-start justify-between gap-4">

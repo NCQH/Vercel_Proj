@@ -12,8 +12,11 @@
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  background-color: #f8fbff;
-  color: #0f172a;
+  --bg-start: #f8fbff;
+  --bg-end: #ffffff;
+  --text-color: #0f172a;
+  --selection: rgba(59, 130, 246, 0.18);
+  --shadow-soft: 0 18px 50px rgba(16, 24, 40, 0.08);
 }
 
 html {
@@ -22,7 +25,8 @@ html {
 
 body {
   min-height: 100vh;
-  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  background: linear-gradient(180deg, var(--bg-start) 0%, var(--bg-end) 100%);
+  color: var(--text-color);
 }
 
 * {
@@ -37,9 +41,9 @@ select {
 }
 
 ::selection {
-  background: rgba(59, 130, 246, 0.18);
+  background: var(--selection);
 }
 
 .shadow-soft {
-  box-shadow: 0 18px 50px rgba(16, 24, 40, 0.08);
+  box-shadow: var(--shadow-soft);
 }
