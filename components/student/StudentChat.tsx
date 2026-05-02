@@ -68,7 +68,12 @@ export default function StudentChat() {
       setIsProfileLoading(true);
       try {
         const response = await fetch("/api/users/me", { cache: "no-store" });
-        if (!response.ok) return;
+        if (!response.ok) {
+          const errText = await response.text();
+          console.error("Profile API Error:", response.status, errText);
+          alert(`Lỗi API Profile (${response.status}): ${errText}`);
+          return;
+        }
         const payload = await response.json();
         if (payload?.profile) {
           setProfile(payload.profile);
@@ -84,6 +89,7 @@ export default function StudentChat() {
         }
       } catch (error) {
         console.error("Failed to load profile", error);
+        alert("Failed to load profile: " + String(error));
       } finally {
         setIsProfileLoading(false);
       }
