@@ -48,6 +48,7 @@ export default function StudentChat() {
   const [isProfileLoading, setIsProfileLoading] = useState(true);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -71,6 +72,15 @@ export default function StudentChat() {
         const payload = await response.json();
         if (payload?.profile) {
           setProfile(payload.profile);
+          if (!payload.onboarded) {
+            setIsRedirecting(true);
+            router.replace("/signup");
+            return;
+          }
+        } else {
+          setIsRedirecting(true);
+          router.replace("/signup");
+          return;
         }
       } catch (error) {
         console.error("Failed to load profile", error);
@@ -299,25 +309,21 @@ export default function StudentChat() {
     }
   };
 
-  if (status === "loading" || isBootstrapping) {
+  if (status === "loading" || isBootstrapping || isRedirecting) {
     return (
-      <MainLayout role="student">
-        <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4">
-          <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
-          <p className="text-sm font-medium text-slate-600">Loading backend data...</p>
-        </div>
-      </MainLayout>
+      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 gap-4">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+        <p className="text-sm font-medium text-slate-600">Loading backend data...</p>
+      </div>
     );
   }
 
   if (status === "unauthenticated") {
     return (
-      <MainLayout role="student">
-        <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4">
-          <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
-          <p className="text-sm font-medium text-slate-600">Redirecting to login...</p>
-        </div>
-      </MainLayout>
+      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 gap-4">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+        <p className="text-sm font-medium text-slate-600">Redirecting to login...</p>
+      </div>
     );
   }
 

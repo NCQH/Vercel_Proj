@@ -10,11 +10,26 @@ export default function SignupPage() {
   const [fullName, setFullName] = useState("");
   const [className, setClassName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [isChecking, setIsChecking] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (status === "unauthenticated") {
       router.replace("/login");
+    } else if (status === "authenticated") {
+      fetch("/api/users/me")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.onboarded) {
+            router.replace("/student/chat");
+          } else {
+            setIsChecking(false);
+          }
+        })
+        .catch((err) => {
+          console.error(err);
+          setIsChecking(false);
+        });
     }
   }, [status, router]);
 
@@ -51,10 +66,13 @@ export default function SignupPage() {
     }
   };
 
-  if (status === "loading") {
+  if (status === "loading" || (status === "authenticated" && isChecking)) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
-        Loading session...
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-700 border-t-indigo-500" />
+          <p>Checking profile status...</p>
+        </div>
       </main>
     );
   }

@@ -33,8 +33,7 @@ export const authOptions: NextAuthOptions = {
   },
   callbacks: {
     async signIn({ user }) {
-      const allowed = await isRegisteredAndOnboarded(user?.email);
-      return allowed;
+      return true;
     },
     async jwt({ token, user, profile }) {
       if (user) {

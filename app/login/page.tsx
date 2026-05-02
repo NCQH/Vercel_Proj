@@ -1,9 +1,14 @@
 "use client";
 
 import { signIn } from "next-auth/react";
-import { Sparkles, ShieldCheck, GraduationCap } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Sparkles, ShieldCheck, GraduationCap, AlertTriangle } from "lucide-react";
 
-export default function LoginPage() {
+import { Suspense } from "react";
+
+function LoginContent() {
+  const searchParams = useSearchParams();
+  const error = searchParams.get("error");
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-10 text-slate-900">
       <section className="mx-auto grid w-full max-w-5xl overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-soft lg:grid-cols-[1.1fr_0.9fr]">
@@ -41,6 +46,13 @@ export default function LoginPage() {
             if this is your first time.
           </p>
 
+          {error && (
+            <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <p>Authentication failed. Please check your network and try again.</p>
+            </div>
+          )}
+
           <button
             id="login-google-btn"
             type="button"
@@ -61,5 +73,13 @@ export default function LoginPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="p-10 text-center">Loading...</div>}>
+      <LoginContent />
+    </Suspense>
   );
 }
