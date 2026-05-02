@@ -15,6 +15,10 @@
       "dest": "/api/auth/$1"
     },
     {
+      "src": "^/api/users/(.*)",
+      "dest": "/api/users/$1"
+    },
+    {
       "src": "^/api/(.*)",
       "dest": "/api/index.py"
     }
