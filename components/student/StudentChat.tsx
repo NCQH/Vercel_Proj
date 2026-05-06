@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signOut, useSession } from "next-auth/react";
-import { Paperclip, Send, Sparkles, BookOpen } from "lucide-react";
+import { useSession } from "next-auth/react";
+import { Paperclip, Send } from "lucide-react";
 import ChatBubble from "../ui/ChatBubble";
 import MainLayout from "../app-shell/MainLayout";
 
@@ -22,6 +22,19 @@ type UserProfile = {
   onboarded?: boolean;
 };
 
+type ChatSessionItem = {
+  session_id: string;
+  last_message?: string;
+  last_role?: string;
+  last_created_at?: string;
+};
+
+type SourceGroup = {
+  id: string;
+  label: string;
+  files: string[];
+};
+
 const initialMessages: Message[] = [
   {
     id: "1",
@@ -30,12 +43,14 @@ const initialMessages: Message[] = [
   }
 ];
 
-const roadmapItems = [
-  { title: "Formative vs Summative", progress: 72 },
-  { title: "Macro Review: GDP & Inflation", progress: 53 },
-  { title: "Citation Tracking Techniques", progress: 85 },
-  { title: "Exam Prep: Lecture 04", progress: 34 },
-];
+const createSessionId = () => `web_session_${Date.now()}`;
+
+type RoadmapItemPreview = {
+  id: string;
+  topic: string;
+  progress: number;
+  priority?: "high" | "medium" | "low";
+};
 
 export default function StudentChat() {
   const { data: session, status } = useSession();
@@ -47,8 +62,15 @@ export default function StudentChat() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(true);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isRedirecting, setIsRedirecting] = useState(false);
+  const [chatSessionId, setChatSessionId] = useState(createSessionId());
+  const [sessions, setSessions] = useState<ChatSessionItem[]>([]);
+  const [showSessions, setShowSessions] = useState(false);
+  const [sourceGroups, setSourceGroups] = useState<SourceGroup[]>([]);
+  const [preferredSources, setPreferredSources] = useState<string[]>([]);
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const [activeSourceGroupId, setActiveSourceGroupId] = useState("");
+  const [roadmapItems, setRoadmapItems] = useState<RoadmapItemPreview[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -106,14 +128,17 @@ export default function StudentChat() {
 
       try {
         const response = await fetch(
-          `/api/chat/history?user_id=${encodeURIComponent(identity)}&session_id=web_session&limit=30`,
+          `/api/chat/history?user_id=${encodeURIComponent(identity)}&session_id=${encodeURIComponent(chatSessionId)}&limit=30`,
           { cache: "no-store" }
         );
         if (!response.ok) return;
 
         const payload = await response.json();
         const historyItems = (payload?.items || []) as Array<{ role?: string; content?: string }>;
-        if (!historyItems.length) return;
+        if (!historyItems.length) {
+          setMessages(initialMessages);
+          return;
+        }
 
         setMessages(
           historyItems.map((item, idx) => ({
@@ -127,10 +152,99 @@ export default function StudentChat() {
       }
     };
 
+    const loadSessions = async () => {
+      const identity =
+        (session?.user as { id?: string } | undefined)?.id ||
+        session?.user?.email ||
+        session?.user?.name ||
+        "";
+      if (!identity) return;
+      try {
+        const response = await fetch(
+          `/api/chat/sessions?user_id=${encodeURIComponent(identity)}&limit=30`,
+          { cache: "no-store" }
+        );
+        if (!response.ok) return;
+        const payload = await response.json();
+        setSessions(payload?.items || []);
+      } catch (error) {
+        console.error("Failed to load chat sessions", error);
+      }
+    };
+
+    const loadSources = async () => {
+      const identity =
+        (session?.user as { id?: string } | undefined)?.id ||
+        session?.user?.email ||
+        session?.user?.name ||
+        "";
+      if (!identity) return;
+      try {
+        const [membershipsRes, uploadsRes] = await Promise.all([
+          fetch(`/api/classes?user_id=${encodeURIComponent(identity)}&role=student`, { cache: "no-store" }),
+          fetch(`/api/uploads?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" }),
+        ]);
+
+        const membershipsData = membershipsRes.ok ? await membershipsRes.json() : { items: [] };
+        const uploadsData = uploadsRes.ok ? await uploadsRes.json() : { items: [] };
+
+        const approvedClasses = (membershipsData.items || [])
+          .filter((m: { status?: string; class?: { id?: string; name?: string } }) => m.status === "approved" && m.class?.id)
+          .map((m: { class: { id: string; name?: string } }) => ({ id: m.class.id, name: m.class.name || "Unknown class" }));
+
+        const classFileResults = await Promise.all(
+          approvedClasses.map(async (c: { id: string; name: string }) => {
+            const res = await fetch(`/api/class-files?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(c.id)}`, { cache: "no-store" });
+            const data = res.ok ? await res.json() : { items: [] };
+            const files = (data.items || []).map((f: { original_filename?: string }) => String(f.original_filename || "")).filter(Boolean);
+            return { id: `class:${c.id}`, label: c.name, files } as SourceGroup;
+          })
+        );
+
+        const myUploadFiles = (uploadsData.items || [])
+          .map((f: { filename?: string }) => String(f.filename || ""))
+          .filter(Boolean);
+
+        const groups: SourceGroup[] = [
+          ...classFileResults.filter((g) => g.files.length > 0),
+          { id: "personal", label: "My uploads", files: myUploadFiles },
+        ].filter((g) => g.files.length > 0);
+
+        setSourceGroups(groups);
+      } catch (error) {
+        console.error("Failed to load chat sources", error);
+      }
+    };
+
+    const loadRoadmapPreview = async () => {
+      const identity =
+        (session?.user as { id?: string } | undefined)?.id ||
+        session?.user?.email ||
+        session?.user?.name ||
+        "";
+      if (!identity) return;
+      try {
+        const response = await fetch(`/api/roadmap?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = await response.json();
+        const items = (payload?.items || []) as Array<{ id?: string; topic?: string; progress?: number; priority?: "high" | "medium" | "low" }>;
+        setRoadmapItems(
+          items.slice(0, 4).map((item, idx) => ({
+            id: String(item.id || `rm-preview-${idx + 1}`),
+            topic: String(item.topic || "Roadmap item"),
+            progress: Math.max(0, Math.min(Number(item.progress || 0), 100)),
+            priority: item.priority,
+          }))
+        );
+      } catch (error) {
+        console.error("Failed to load roadmap preview", error);
+      }
+    };
+
     const bootstrap = async () => {
       setIsBootstrapping(true);
       try {
-        await Promise.all([loadProfile(), loadHistory()]);
+        await Promise.all([loadProfile(), loadHistory(), loadSessions(), loadSources(), loadRoadmapPreview()]);
       } finally {
         setIsBootstrapping(false);
       }
@@ -139,20 +253,23 @@ export default function StudentChat() {
     if (status === "authenticated") {
       bootstrap();
     }
-  }, [status, session]);
+  }, [status, session, chatSessionId]);
 
   // Shared send handler (used by both form submit and Enter key)
   const send = async () => {
     if (!draft.trim() || isSending) return;
 
     const userMessage = draft.trim();
+    const tagSuffix = preferredSources.length
+      ? `\n\n[Tagged files: ${preferredSources.join(", ")}]`
+      : "";
 
     setMessages((current) => {
       const userId = String(current.length + 1);
       const assistantId = String(current.length + 2);
       return [
         ...current,
-        { id: userId, role: "user", text: userMessage },
+        { id: userId, role: "user", text: userMessage + tagSuffix },
         { id: assistantId, role: "assistant", text: "Thinking..." },
       ];
     });
@@ -165,14 +282,63 @@ export default function StudentChat() {
         session?.user?.email ||
         session?.user?.name ||
         "anonymous_user";
+
+      const payload = {
+        message: userMessage,
+        user_id: identity,
+        session_id: chatSessionId,
+        preferred_sources: preferredSources,
+      };
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+
       const response = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMessage, user_id: identity }),
+        body: JSON.stringify(payload),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok || !response.body) {
-        throw new Error("Failed to connect to backend stream");
+        let detail = "";
+        try {
+          detail = await response.text();
+        } catch {
+          detail = "";
+        }
+
+        // Fallback to non-stream endpoint for transient backend/network issues
+        const fallback = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!fallback.ok) {
+          const fallbackDetail = await fallback.text().catch(() => "");
+          throw new Error(
+            `Stream failed (${response.status}). ${detail || ""} Fallback failed (${fallback.status}). ${fallbackDetail || ""}`
+          );
+        }
+
+        const fallbackJson = await fallback.json();
+        const fallbackReply = String(fallbackJson?.reply || "").trim() || "Agent did not return a response.";
+        setMessages((current) => {
+          const next = [...current];
+          const lastAssistantIndex = [...next]
+            .map((m, idx) => ({ m, idx }))
+            .reverse()
+            .find(({ m }) => m.role === "assistant")?.idx;
+          if (lastAssistantIndex === undefined) return current;
+          next[lastAssistantIndex] = {
+            ...next[lastAssistantIndex],
+            text: fallbackReply,
+          };
+          return next;
+        });
+        return;
       }
 
       const reader = response.body.getReader();
@@ -244,10 +410,23 @@ export default function StudentChat() {
         {
           id: String(current.length + 1),
           role: "assistant",
-          text: "Connection error to Agent API. Please check the server.",
+          text: "Connection error to Agent API. Please try again.",
         },
       ]);
     } finally {
+      const identity =
+        (session?.user as { id?: string } | undefined)?.id ||
+        session?.user?.email ||
+        session?.user?.name ||
+        "";
+      if (identity) {
+        fetch(`/api/chat/sessions?user_id=${encodeURIComponent(identity)}&limit=30`, { cache: "no-store" })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((payload) => {
+            if (payload?.items) setSessions(payload.items);
+          })
+          .catch(() => undefined);
+      }
       setIsSending(false);
     }
   };
@@ -333,69 +512,33 @@ export default function StudentChat() {
     );
   }
 
+  const startNewConversation = () => {
+    if (isSending) return;
+    setDraft("");
+    setMessages(initialMessages);
+    setChatSessionId(createSessionId());
+    setShowSessions(false);
+  };
+
+  const selectSession = (sessionId: string) => {
+    if (!sessionId || isSending) return;
+    setDraft("");
+    setChatSessionId(sessionId);
+    setShowSessions(false);
+  };
+
+  const togglePreferredSource = (source: string) => {
+    setPreferredSources((current) =>
+      current.includes(source)
+        ? current.filter((s) => s !== source)
+        : [...current, source]
+    );
+  };
+
+  const activeSourceGroup = sourceGroups.find((g) => g.id === activeSourceGroupId) || null;
+
   return (
     <MainLayout role="student">
-      <div className="fixed right-6 top-5 z-50">
-        <div className="relative">
-          <button
-            id="account-menu-toggle"
-            type="button"
-            onClick={() => setIsAccountMenuOpen((prev) => !prev)}
-            className="flex items-center rounded-full border border-slate-300 bg-white p-1.5 shadow-sm transition hover:shadow"
-          >
-            <div className="h-8 w-8 overflow-hidden rounded-full bg-brand-100 ring-1 ring-slate-200">
-              {(profile?.image_url || session?.user?.image) ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={profile?.image_url || session?.user?.image || ""}
-                  alt="User avatar"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-brand-700">
-                  {(profile?.full_name || session?.user?.name || "U").slice(0, 1).toUpperCase()}
-                </div>
-              )}
-            </div>
-          </button>
-
-          {isAccountMenuOpen ? (
-            <div className="absolute right-0 z-20 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Account</p>
-              <p className="mt-2 text-sm font-semibold text-slate-900">
-                {profile?.full_name || session?.user?.name || "Unknown User"}
-              </p>
-              <p className="text-xs text-slate-600">
-                {profile?.email || session?.user?.email || "No email"}
-              </p>
-
-              <div className="mt-4 grid gap-2 text-sm">
-                <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                  <span className="text-slate-500">Class</span>
-                  <span className="font-medium text-slate-900">
-                    {isProfileLoading ? "Loading..." : profile?.class_name || "Not set"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                  <span className="text-slate-500">Onboarding</span>
-                  <span className={`font-medium ${profile?.onboarded ? "text-emerald-700" : "text-amber-700"}`}>
-                    {profile?.onboarded ? "Completed" : "Pending"}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                id="logout-btn"
-                type="button"
-                onClick={() => signOut({ callbackUrl: "/login" })}
-                className="mt-4 w-full rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-              >
-                Sign out
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </div>
 
       <section className="grid gap-6 xl:grid-cols-[1.45fr_0.9fr] h-[calc(100vh-150px)]">
         <div className="flex flex-col rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft h-full overflow-hidden">
@@ -408,10 +551,47 @@ export default function StudentChat() {
                 Ask your AI teaching assistant
               </h1>
             </div>
-            <div className="rounded-3xl bg-brand-50 px-4 py-3 text-sm font-semibold text-brand-700">
-              Live response mode
+            <div className="flex items-center gap-2">
+              <button
+                id="chat-history-toggle-btn"
+                type="button"
+                onClick={() => setShowSessions((v) => !v)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Old chats
+              </button>
+              <button
+                id="new-chat-btn"
+                type="button"
+                onClick={startNewConversation}
+                disabled={isSending}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                New chat
+              </button>
             </div>
           </div>
+
+          {showSessions ? (
+            <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Saved conversations</p>
+              <div className="max-h-44 space-y-2 overflow-y-auto">
+                {sessions.map((s) => (
+                  <button
+                    key={s.session_id}
+                    id={`old-chat-${s.session_id}`}
+                    type="button"
+                    onClick={() => selectSession(s.session_id)}
+                    className={`w-full rounded-xl border px-3 py-2 text-left text-sm transition ${chatSessionId === s.session_id ? "border-brand-300 bg-brand-50" : "border-slate-200 bg-white hover:bg-slate-100"}`}
+                  >
+                    <p className="font-medium text-slate-900">{s.last_message || "(No preview)"}</p>
+                    <p className="mt-1 text-xs text-slate-500">{s.last_created_at ? new Date(s.last_created_at).toLocaleString() : s.session_id}</p>
+                  </button>
+                ))}
+                {sessions.length === 0 ? <p className="text-sm text-slate-500">No old chats yet.</p> : null}
+              </div>
+            </div>
+          ) : null}
 
           <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-2 min-h-0">
             {messages.map((message) => (
@@ -429,6 +609,74 @@ export default function StudentChat() {
             onSubmit={handleSubmit}
             className="mt-6 shrink-0 rounded-[2rem] border border-slate-200 bg-slate-50 p-4 shadow-sm"
           >
+            <div className="mb-3 flex items-center gap-2">
+              <button
+                id="open-source-picker-btn"
+                type="button"
+                onClick={() => {
+                  setShowSourcePicker((v) => !v);
+                  setActiveSourceGroupId("");
+                }}
+                className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+              >
+                + File
+              </button>
+              {preferredSources.length > 0 ? (
+                <p className="text-xs text-slate-600">{preferredSources.length} file(s) tagged</p>
+              ) : (
+                <p className="text-xs text-slate-500">No tagged files</p>
+              )}
+            </div>
+
+            {showSourcePicker ? (
+              <div className="mb-3 rounded-2xl border border-slate-200 bg-white p-3">
+                {!activeSourceGroup ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Choose source group</p>
+                    {sourceGroups.map((group) => (
+                      <button
+                        key={group.id}
+                        id={`source-group-${group.id}`}
+                        type="button"
+                        onClick={() => setActiveSourceGroupId(group.id)}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-left text-sm text-slate-800 transition hover:bg-slate-50"
+                      >
+                        {group.label}
+                      </button>
+                    ))}
+                    {sourceGroups.length === 0 ? <p className="text-xs text-slate-500">No files available yet.</p> : null}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <button
+                      id="source-group-back-btn"
+                      type="button"
+                      onClick={() => setActiveSourceGroupId("")}
+                      className="text-xs font-semibold text-brand-700"
+                    >
+                      ← Back
+                    </button>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{activeSourceGroup.label}</p>
+                    <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
+                      {activeSourceGroup.files.map((source) => {
+                        const selected = preferredSources.includes(source);
+                        return (
+                          <button
+                            key={`${activeSourceGroup.id}-${source}`}
+                            id={`source-tag-${source}`}
+                            type="button"
+                            onClick={() => togglePreferredSource(source)}
+                            className={`rounded-full border px-3 py-1 text-xs transition ${selected ? "border-brand-500 bg-brand-100 text-brand-800" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"}`}
+                          >
+                            {source}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <label className="flex-1">
                 <span className="sr-only">Ask a question</span>
@@ -490,15 +738,15 @@ export default function StudentChat() {
             <div className="mt-6 space-y-4">
               {roadmapItems.map((item) => (
                 <div
-                  key={item.title}
+                  key={item.id}
                   className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div>
                       <p className="font-semibold text-slate-900">
-                        {item.title}
+                        {item.topic}
                       </p>
-                      <p className="text-sm text-slate-600">Review priority</p>
+                      <p className="text-sm text-slate-600">Review priority {item.priority ? `• ${item.priority}` : ""}</p>
                     </div>
                     <div className="text-sm font-semibold text-brand-700">
                       {item.progress}%
@@ -512,23 +760,11 @@ export default function StudentChat() {
                   </div>
                 </div>
               ))}
-            </div>
-          </div>
-
-          <div className="rounded-[2rem] border border-slate-200 bg-brand-950 p-6 text-white shadow-soft">
-            <div className="flex items-center gap-3 text-sm font-semibold uppercase tracking-[0.24em] text-blue-200">
-              <Sparkles className="h-4 w-4" />
-              Study insight
-            </div>
-            <div className="mt-4 space-y-3 text-sm leading-6 text-slate-200">
-              <p>
-                Students answering similar questions improved retention by 23%
-                when they reviewed the recommended lecture references.
-              </p>
-              <p>
-                Focus on the top gap areas in your next session and compare with
-                the AI-suggested citations.
-              </p>
+              {roadmapItems.length === 0 ? (
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                  No roadmap yet. Generate one in Roadmap page.
+                </div>
+              ) : null}
             </div>
           </div>
         </aside>

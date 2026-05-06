@@ -8,7 +8,7 @@ export default function SignupPage() {
   const { status } = useSession();
   const router = useRouter();
   const [fullName, setFullName] = useState("");
-  const [className, setClassName] = useState("");
+  const [role, setRole] = useState("student");
   const [saving, setSaving] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
   const [error, setError] = useState("");
@@ -21,7 +21,8 @@ export default function SignupPage() {
         .then((res) => res.json())
         .then((data) => {
           if (data?.onboarded) {
-            router.replace("/student/chat");
+            const role = String(data?.profile?.class_name || "student").toLowerCase();
+            router.replace(role === "lecturer" ? "/lecturer/dashboard" : "/student/chat");
           } else {
             setIsChecking(false);
           }
@@ -37,8 +38,8 @@ export default function SignupPage() {
     event.preventDefault();
     setError("");
 
-    if (!fullName.trim() || !className.trim()) {
-      setError("Please enter both full name and class.");
+    if (!fullName.trim() || !role) {
+      setError("Please enter full name and select a role.");
       return;
     }
 
@@ -49,7 +50,7 @@ export default function SignupPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           full_name: fullName.trim(),
-          class_name: className.trim(),
+          role: role,
         }),
       });
 
@@ -58,7 +59,7 @@ export default function SignupPage() {
         throw new Error(payload.error || "Could not save profile");
       }
 
-      router.replace("/student/chat");
+      router.replace(role === "lecturer" ? "/lecturer/dashboard" : "/student/chat");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -97,15 +98,17 @@ export default function SignupPage() {
             />
           </label>
 
-          <label htmlFor="class-name-input" className="block space-y-2">
-            <span className="text-sm text-slate-200">Class</span>
-            <input
-              id="class-name-input"
-              value={className}
-              onChange={(e) => setClassName(e.target.value)}
+          <label htmlFor="role-select" className="block space-y-2">
+            <span className="text-sm text-slate-200">Role</span>
+            <select
+              id="role-select"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
               className="w-full rounded-2xl border border-white/20 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-indigo-300"
-              placeholder="SE-AI-2026"
-            />
+            >
+              <option value="student" className="bg-slate-900 text-white">Student</option>
+              <option value="lecturer" className="bg-slate-900 text-white">Lecturer</option>
+            </select>
           </label>
 
           {error ? (

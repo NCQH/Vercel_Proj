@@ -5,7 +5,7 @@ The state flows through the graph, carrying messages, metadata, and
 memory context needed by each node.
 """
 
-from typing import Annotated, List, Optional, Sequence
+from typing import Annotated, List, Sequence
 from typing_extensions import TypedDict
 
 from langchain_core.messages import BaseMessage
@@ -23,6 +23,8 @@ class AgentState(TypedDict):
         user_id:  Identifies the user for memory look-ups.
         session_id: Groups turns within one conversation session.
         sources:  Citation sources collected during tool execution.
+        allowed_sources: Source filename allowlist user can access.
+        preferred_sources: Source filename tags user wants retrieval to prioritize.
         memory_block: Formatted long-term memory string injected into system prompt.
         summary_block: Running session summary injected into system prompt.
         route: Routing decision from router agent ('retrieval' | 'direct').
@@ -35,6 +37,8 @@ class AgentState(TypedDict):
     user_id: str
     session_id: str
     sources: List[str]
+    allowed_sources: List[str]
+    preferred_sources: List[str]
     memory_block: str
     summary_block: str
     route: str

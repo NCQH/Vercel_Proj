@@ -28,6 +28,8 @@ def run_agent(
     user_input: str,
     user_id: str = "default",
     session_id: str = "default",
+    allowed_sources: list[str] | None = None,
+    preferred_sources: list[str] | None = None,
 ) -> str:
     """
     Run the LangGraph agent and return the final answer string.
@@ -46,6 +48,8 @@ def run_agent(
         "user_id": user_id,
         "session_id": session_id,
         "sources": [],
+        "allowed_sources": allowed_sources or [],
+        "preferred_sources": preferred_sources or [],
         "memory_block": "",
         "summary_block": "",
         "route": "",
@@ -64,9 +68,15 @@ def run_agent(
             final_answer = msg.content or ""
             break
 
-    # Append sources if the model didn't include them
+    # Append sources if the model didn't include them.
+    # Skip source attachment for explicit low-confidence fallback replies.
     sources = result.get("sources", [])
-    if sources and "sources:" not in final_answer.lower():
+    low_confidence_markers = (
+        "Mình chưa thấy đủ thông tin đáng tin trong tài liệu",
+        "tra cứu lại chính xác hơn",
+    )
+    is_low_confidence_reply = any(marker in final_answer for marker in low_confidence_markers)
+    if sources and "sources:" not in final_answer.lower() and not is_low_confidence_reply:
         source_block = "\nSources:\n" + "\n".join(f"- {s}" for s in sources)
         final_answer = final_answer.rstrip() + source_block
 

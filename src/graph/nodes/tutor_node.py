@@ -22,7 +22,9 @@ def tutor_node(state: AgentState) -> dict:
     chunks = state.get("retrieved_chunks", [])
     result = generate_answer(question, chunks)
     answer = result.get("answer", "")
+    used_sources = result.get("used_sources", [])
     return {
         "messages": [AIMessage(content=answer)],
         "final_answer": answer,
+        "sources": used_sources,
     }

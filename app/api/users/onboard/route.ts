@@ -12,12 +12,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = (await request.json()) as { full_name?: string; class_name?: string };
+    const body = (await request.json()) as { full_name?: string; role?: string };
     const full_name = (body.full_name || "").trim();
-    const class_name = (body.class_name || "").trim();
+    const role = (body.role || "").trim();
 
-    if (!full_name || !class_name) {
-      return NextResponse.json({ error: "full_name and class_name are required" }, { status: 400 });
+    if (!full_name || !role) {
+      return NextResponse.json({ error: "full_name and role are required" }, { status: 400 });
     }
 
     const existingByEmail = await getUserProfileByEmail(user.email);
@@ -32,7 +32,7 @@ export async function POST(request: Request) {
       id: user.id,
       email: user.email,
       full_name,
-      class_name,
+      class_name: role,
       image_url: user.image,
     });
 
