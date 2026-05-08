@@ -843,7 +843,42 @@ def _list_pending_requests_for_lecturer(lecturer_id: str, class_id: str = "") ->
             if response.status_code >= 300:
                 raise HTTPException(status_code=500, detail=f"Failed to list pending requests: {response.text}")
             out.extend(response.json())
-    return out
+
+    student_ids = sorted({str(row.get("student_id") or "").strip() for row in out if row.get("student_id")})
+    users_by_id: dict[str, dict] = {}
+    users_by_email: dict[str, dict] = {}
+    if student_ids:
+        id_filter = ",".join(_encode_eq(sid) for sid in student_ids)
+        users_url = (
+            f"{SUPABASE_URL}/rest/v1/users"
+            f"?or=(id.in.({id_filter}),email.in.({id_filter}))"
+            f"&select=id,full_name,email"
+        )
+        with httpx.Client(timeout=15.0) as client:
+            users_resp = client.get(users_url, headers=headers)
+        if users_resp.status_code < 300:
+            for user in users_resp.json():
+                uid = str(user.get("id") or "").strip()
+                uemail = str(user.get("email") or "").strip()
+                if uid:
+                    users_by_id[uid] = user
+                if uemail:
+                    users_by_email[uemail] = user
+
+    normalized = []
+    for row in out:
+        sid = str(row.get("student_id") or "")
+        user = users_by_id.get(sid) or users_by_email.get(sid) or {}
+        normalized.append({
+            "id": row.get("id"),
+            "class_id": row.get("class_id"),
+            "student_id": sid,
+            "student_name": (user.get("full_name") or "").strip(),
+            "student_email": (user.get("email") or "").strip(),
+            "status": row.get("status"),
+            "requested_at": row.get("requested_at"),
+        })
+    return normalized
 
 
 def _ensure_lecturer_class_owner(lecturer_id: str, class_id: str) -> None:
@@ -904,6 +939,104 @@ def list_pending_requests(user_id: str = "", class_id: str = ""):
         raise HTTPException(status_code=401, detail="Missing user_id")
     safe_user = _safe_user_id(user_id)
     items = _list_pending_requests_for_lecturer(safe_user, class_id=class_id)
+    return {"ok": True, "items": items}
+
+
+@app.get("/api/classes/members")
+def list_class_members(user_id: str = "", class_id: str = "", status: str = ""):
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Missing user_id")
+    if not class_id:
+        raise HTTPException(status_code=400, detail="Missing class_id")
+
+    safe_user = _safe_user_id(user_id)
+    _ensure_lecturer_class_owner(safe_user, class_id)
+
+    normalized_status = status.strip().lower()
+    if normalized_status and normalized_status not in {"pending", "approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+
+    headers = _supabase_headers()
+    query = (
+        f"{SUPABASE_URL}/rest/v1/class_members"
+        f"?class_id=eq.{_encode_eq(class_id)}"
+        f"&select=id,class_id,student_id,status,requested_at,approved_at"
+        f"&order=requested_at.asc"
+    )
+    if normalized_status:
+        query += f"&status=eq.{_encode_eq(normalized_status)}"
+
+    with httpx.Client(timeout=15.0) as client:
+        response = client.get(query, headers=headers)
+
+    if response.status_code >= 300:
+        raise HTTPException(status_code=500, detail=f"Failed to list class members: {response.text}")
+
+    rows = response.json()
+    student_ids = sorted({str(row.get("student_id") or "").strip() for row in rows if row.get("student_id")})
+    users_by_id: dict[str, dict] = {}
+    users_by_email: dict[str, dict] = {}
+    if student_ids:
+        email_candidates: set[str] = set()
+        for sid in student_ids:
+            base = sid.strip()
+            if not base:
+                continue
+            email_candidates.add(base)
+            if "_" in base and "@" not in base:
+                email_candidates.add(base.replace("_", "@", 1))
+
+        or_terms: list[str] = []
+        for sid in student_ids:
+            esc = _encode_eq(sid)
+            or_terms.append(f"id.eq.{esc}")
+
+        for em in sorted(email_candidates):
+            esc = _encode_eq(em)
+            or_terms.append(f"email.eq.{esc}")
+
+        users_url = (
+            f"{SUPABASE_URL}/rest/v1/users"
+            f"?or=({','.join(or_terms)})"
+            f"&select=id,full_name,email"
+        )
+        with httpx.Client(timeout=15.0) as client:
+            users_resp = client.get(users_url, headers=headers)
+        if users_resp.status_code < 300:
+            for user in users_resp.json():
+                uid = str(user.get("id") or "").strip()
+                uemail = str(user.get("email") or "").strip()
+                if uid:
+                    users_by_id[uid] = user
+                    users_by_id[uid.lower()] = user
+                if uemail:
+                    users_by_email[uemail] = user
+                    users_by_email[uemail.lower()] = user
+
+    items = []
+    for row in rows:
+        sid = str(row.get("student_id") or "").strip()
+        sid_email_guess = sid.replace("_", "@", 1) if "_" in sid and "@" not in sid else sid
+        user = (
+            users_by_id.get(sid)
+            or users_by_email.get(sid)
+            or users_by_id.get(sid.lower())
+            or users_by_email.get(sid.lower())
+            or users_by_email.get(sid_email_guess)
+            or users_by_email.get(sid_email_guess.lower())
+            or {}
+        )
+        full_name = (user.get("full_name") or "").strip()
+        items.append({
+            "id": row.get("id"),
+            "class_id": row.get("class_id"),
+            "student_id": sid,
+            "student_name": full_name,
+            "student_email": (user.get("email") or "").strip(),
+            "status": row.get("status"),
+            "requested_at": row.get("requested_at"),
+            "approved_at": row.get("approved_at"),
+        })
     return {"ok": True, "items": items}
 
 
