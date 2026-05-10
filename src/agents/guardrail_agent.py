@@ -49,6 +49,11 @@ ALLOW if:
 - Asks for learning help, explanations, or study guidance
 - Requests clarification on academic concepts
 - General academic questions
+- Questions about uploaded files, course materials, or documents (e.g., "summarize file X", "explain document Y")
+- Questions that reference specific files or materials the user has access to
+
+IMPORTANT: If the input mentions files, documents, or course materials, it is EDUCATIONAL and should be ALLOWED.
+The system has access to user's uploaded files and will retrieve the content automatically.
 
 Return STRICT JSON only:
 {"safe": true/false, "reason": "short reason", "category": "violence|sexual|hate|cheating|injection|off_topic|medical|legal|safe"}

@@ -51,4 +51,4 @@ def run(question: str, mode: str = "hybrid", top_k: int = 5, collections: List[s
     return {
         "chunks": chunks,
         "sources": sources,
-    }
+    }

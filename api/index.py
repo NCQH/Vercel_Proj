@@ -320,16 +320,11 @@ def chat(request: ChatRequest):
         safe_message = _sanitize_chat_message(request.message)
         if not safe_message:
             raise HTTPException(status_code=400, detail="Empty or invalid message")
-        enriched_message = _build_personalized_prompt(
-            safe_message,
-            profile,
-            history,
-            allowed_sources=allowed_sources,
-            preferred_sources=preferred_sources,
-        )
-
+        
+        # Send RAW message to agent - enrichment will happen inside nodes
+        # This allows guardrail to check the actual user input, not the enriched prompt
         response, state = run_agent(
-            enriched_message,
+            safe_message,  # ✅ Send raw message, not enriched
             user_id=safe_user,
             session_id=request.session_id,
             allowed_sources=allowed_sources,
@@ -715,16 +710,10 @@ async def chat_stream(request: ChatRequest):
             if not safe_message:
                 yield "\n[ERROR] Empty or invalid message"
                 return
-            enriched_message = _build_personalized_prompt(
-                safe_message,
-                profile,
-                history,
-                allowed_sources=allowed_sources,
-                preferred_sources=preferred_sources,
-            )
 
+            # Send RAW message to graph - same as non-streaming endpoint
             initial_state = {
-                "messages": [HumanMessage(content=enriched_message)],
+                "messages": [HumanMessage(content=safe_message)],  # ✅ Raw message
                 "user_id": safe_user,
                 "session_id": request.session_id,
                 "sources": [],
