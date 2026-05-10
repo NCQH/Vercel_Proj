@@ -31,6 +31,8 @@ class AgentState(TypedDict):
         route_reason: Human-readable reason for route decision.
         retrieved_chunks: Structured chunks returned by retrieval agent.
         final_answer: Final answer text prepared by tutor/direct branch.
+        guardrail_passed: Whether input passed content safety check.
+        guardrail_rejection: Rejection message if guardrail failed.
 """
 
     messages: Annotated[Sequence[BaseMessage], add_messages]
@@ -38,6 +40,7 @@ class AgentState(TypedDict):
     session_id: str
     sources: List[str]
     allowed_sources: List[str]
+    allowed_collections: List[str]
     preferred_sources: List[str]
     memory_block: str
     summary_block: str
@@ -45,3 +48,5 @@ class AgentState(TypedDict):
     route_reason: str
     retrieved_chunks: List[dict]
     final_answer: str
+    guardrail_passed: bool
+    guardrail_rejection: str

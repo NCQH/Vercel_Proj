@@ -6,8 +6,22 @@ Calls retrieval agent and stores chunks + sources in state.
 
 from __future__ import annotations
 
+import logging
+
 from src.agents.retrieval_agent import run as run_retrieval
 from src.graph.state import AgentState
+
+logger = logging.getLogger(__name__)
+
+_MIN_RELEVANCE_SCORE = 0.01
+
+
+def _score_of(chunk: dict) -> float:
+    return float(chunk.get("rerank_score", chunk.get("relevance_score", chunk.get("score", 0.0))) or 0.0)
+
+
+def _src_of(chunk: dict) -> str:
+    return str((chunk.get("metadata") or {}).get("source") or "")
 
 
 def retrieval_node(state: AgentState) -> dict:
@@ -17,33 +31,107 @@ def retrieval_node(state: AgentState) -> dict:
             question = msg.content
             break
 
+    allowed_collections = state.get("allowed_collections") or [state.get("user_id", "default")]
+
     result = run_retrieval(
         question,
         mode="hybrid",
         top_k=5,
-        user_id=state.get("user_id", "default"),
+        collections=allowed_collections,
     )
 
     allowed_sources = set(state.get("allowed_sources") or [])
     preferred_sources = set(state.get("preferred_sources") or [])
 
     chunks = result.get("chunks", [])
+    logger.info(
+        "[RETRIEVAL] raw chunks=%d allowed_collections=%s allowed_sources=%d preferred_sources=%d",
+        len(chunks),
+        allowed_collections,
+        len(allowed_sources),
+        len(preferred_sources),
+    )
+
+    if chunks:
+        top_raw = sorted(chunks, key=_score_of, reverse=True)[:5]
+        logger.info(
+            "[RETRIEVAL] raw top=%s",
+            [f"{_src_of(c)}:{_score_of(c):.4f}" for c in top_raw],
+        )
+
+    before_source_filter = len(chunks)
     if allowed_sources:
         chunks = [
             c for c in chunks
-            if str((c.get("metadata") or {}).get("source") or "") in allowed_sources
+            if _src_of(c) in allowed_sources
         ]
+    logger.info(
+        "[RETRIEVAL] after source filter chunks=%d removed=%d",
+        len(chunks),
+        before_source_filter - len(chunks),
+    )
 
     if preferred_sources:
         preferred_chunks = []
         fallback_chunks = []
         for c in chunks:
-            src = str((c.get("metadata") or {}).get("source") or "")
+            src = _src_of(c)
             if src in preferred_sources:
                 preferred_chunks.append(c)
             else:
                 fallback_chunks.append(c)
         chunks = preferred_chunks + fallback_chunks
+        logger.info(
+            "[RETRIEVAL] preferred reorder preferred=%d fallback=%d",
+            len(preferred_chunks),
+            len(fallback_chunks),
+        )
+
+    pre_score_chunks = list(chunks)
+
+    filtered = []
+    seen_keys = set()
+    dropped_low_score = 0
+    dropped_dedup = 0
+    for c in chunks:
+        relevance = _score_of(c)
+        if relevance < _MIN_RELEVANCE_SCORE:
+            dropped_low_score += 1
+            continue
+        meta = c.get("metadata") or {}
+        source = str(meta.get("source") or "")
+        chunk_id = str(meta.get("chunk_id") or "")
+        text_head = str(c.get("text") or "")[:120]
+        dedup_key = f"{source}|{chunk_id}|{text_head}"
+        if dedup_key in seen_keys:
+            dropped_dedup += 1
+            continue
+        seen_keys.add(dedup_key)
+        filtered.append(c)
+
+    chunks = filtered
+    logger.info(
+        "[RETRIEVAL] after score+dedup chunks=%d dropped_low_score=%d dropped_dedup=%d min_score=%.3f",
+        len(chunks),
+        dropped_low_score,
+        dropped_dedup,
+        _MIN_RELEVANCE_SCORE,
+    )
+
+    if not chunks and pre_score_chunks:
+        restored = sorted(pre_score_chunks, key=_score_of, reverse=True)[:3]
+        chunks = restored
+        logger.info(
+            "[RETRIEVAL] fallback restored chunks=%d from source-filtered set",
+            len(chunks),
+        )
+
+    if chunks:
+        top_final = sorted(chunks, key=_score_of, reverse=True)[:5]
+        logger.info(
+            "[RETRIEVAL] final top=%s",
+            [f"{_src_of(c)}:{_score_of(c):.4f}" for c in top_final],
+        )
 
     # Only keep citations from top-ranked chunks likely used by tutor prompt.
     # This avoids appending every possible source from retrieval tail.
@@ -53,6 +141,8 @@ def retrieval_node(state: AgentState) -> dict:
         src = str((c.get("metadata") or {}).get("source") or "")
         if src and src not in sources:
             sources.append(src)
+
+    logger.info("[RETRIEVAL] citation sources=%s", sources)
 
     return {
         "retrieved_chunks": chunks,

@@ -3,17 +3,23 @@ LangGraph – Multi-agent Graph Builder for AI Teaching Assistant.
 
 Flow:
 
-    load_memory -> router -> (retrieval -> tutor | tutor) -> save_memory -> END
+    load_memory -> guardrail_input -> (REJECT | router -> (retrieval -> tutor | tutor)) -> save_memory -> END
 """
 
 from langgraph.graph import END, StateGraph
 
 from src.graph.state import AgentState
 from src.graph.nodes.load_memory_node import load_memory_node
+from src.graph.nodes.guardrail_input_node import guardrail_input_node
 from src.graph.nodes.router_node import router_node
 from src.graph.nodes.retrieval_node import retrieval_node
 from src.graph.nodes.tutor_node import tutor_node
 from src.graph.nodes.save_memory_node import save_memory_node
+
+
+def route_after_guardrail(state: AgentState) -> str:
+    """Route to router if guardrail passed, otherwise skip to save_memory."""
+    return "router" if state.get("guardrail_passed", True) else "save_memory"
 
 
 def route_after_router(state: AgentState) -> str:
@@ -25,6 +31,7 @@ builder = StateGraph(AgentState)
 
 # Nodes
 builder.add_node("load_memory", load_memory_node)
+builder.add_node("guardrail_input", guardrail_input_node)
 builder.add_node("router", router_node)
 builder.add_node("retrieval", retrieval_node)
 builder.add_node("tutor", tutor_node)
@@ -32,7 +39,16 @@ builder.add_node("save_memory", save_memory_node)
 
 # Edges
 builder.set_entry_point("load_memory")
-builder.add_edge("load_memory", "router")
+builder.add_edge("load_memory", "guardrail_input")
+
+builder.add_conditional_edges(
+    "guardrail_input",
+    route_after_guardrail,
+    {
+        "router": "router",
+        "save_memory": "save_memory",
+    },
+)
 
 builder.add_conditional_edges(
     "router",

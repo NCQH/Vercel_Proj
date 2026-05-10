@@ -136,7 +136,7 @@ export default function LecturerMaterialsPage() {
              <h2 className="font-bold text-lg text-slate-900">Class Files</h2>
              <button id="upload-class-file-btn" onClick={() => fileRef.current?.click()} className="rounded-xl bg-slate-900 hover:bg-slate-800 px-5 py-2.5 text-sm font-bold text-white transition shadow-sm">Upload Material</button>
           </div>
-          <input ref={fileRef} type="file" className="hidden" onChange={uploadClassFile} />
+          <input ref={fileRef} type="file" accept=".pdf,.docx" className="hidden" onChange={uploadClassFile} />
           <div className="mt-5 space-y-2">
             {classFiles.map((f) => (
               <div key={f.file_id} className="group flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">

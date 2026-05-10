@@ -22,7 +22,7 @@ from src.memory.memory_service import (
 )
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
+from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
 from dotenv import load_dotenv
 import logging
 import asyncio
@@ -56,17 +56,63 @@ class ChatRequest(BaseModel):
     preferred_sources: list[str] = []
 
 
+_MAX_CHAT_MESSAGE_LEN = 4000
+_MAX_PREFERRED_SOURCES = 20
+_INJECTION_PATTERNS = (
+    "ignore previous instructions",
+    "system prompt",
+    "developer message",
+    "reveal hidden",
+    "jailbreak",
+    "bypass policy",
+)
+
+
+def _sanitize_chat_message(raw: str) -> str:
+    text = (raw or "").replace("\x00", " ")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    for pat in _INJECTION_PATTERNS:
+        text = re.sub(re.escape(pat), "[redacted]", text, flags=re.IGNORECASE)
+    return text[:_MAX_CHAT_MESSAGE_LEN]
+
+
+def _sanitize_preferred_sources(raw_sources: list[str] | None, allowed_sources: list[str]) -> list[str]:
+    allowed = set(allowed_sources or [])
+    clean = []
+    for src in raw_sources or []:
+        if not isinstance(src, str):
+            continue
+        s = src.strip()[:180]
+        if not s:
+            continue
+        if allowed and s not in allowed:
+            continue
+        if s not in clean:
+            clean.append(s)
+        if len(clean) >= _MAX_PREFERRED_SOURCES:
+            break
+    return clean
+
+
 def _encode_eq(value: str) -> str:
     return httpx.QueryParams({"v": value})["v"]
 
 
-def _save_chat_message(user_id: str, session_id: str, role: str, content: str) -> None:
+def _save_chat_message(
+    user_id: str,
+    session_id: str,
+    role: str,
+    content: str,
+    citations: list[str] | None = None,
+) -> None:
     headers = _supabase_headers()
     payload = {
         "user_id": user_id,
         "session_id": session_id,
         "role": role,
         "content": content,
+        "citations": citations or [],
     }
 
     with httpx.Client(timeout=15.0) as client:
@@ -101,7 +147,7 @@ def _get_recent_chat_history(user_id: str, session_id: str, limit: int = 8) -> l
         f"{SUPABASE_URL}/rest/v1/chat_messages"
         f"?user_id=eq.{_encode_eq(user_id)}"
         f"&session_id=eq.{_encode_eq(session_id)}"
-        f"&select=role,content,created_at"
+        f"&select=role,content,citations,created_at"
         f"&order=created_at.desc"
         f"&limit={limit}"
     )
@@ -200,9 +246,10 @@ def _build_personalized_prompt(
 
 
 
-def _get_allowed_sources(user_id: str) -> list[str]:
+def _get_allowed_sources_and_collections(user_id: str) -> tuple[list[str], list[str]]:
     headers = _supabase_headers()
     allowed: set[str] = set()
+    collections: set[str] = {user_id}
 
     # Personal uploads
     personal_url = (
@@ -230,6 +277,7 @@ def _get_allowed_sources(user_id: str) -> list[str]:
         if m_resp.status_code < 300:
             class_ids = [r.get("class_id") for r in m_resp.json() if r.get("class_id")]
             for cid in class_ids:
+                collections.add(f"class_{cid}")
                 cf_url = (
                     f"{SUPABASE_URL}/rest/v1/class_files"
                     f"?class_id=eq.{_encode_eq(str(cid))}"
@@ -242,7 +290,7 @@ def _get_allowed_sources(user_id: str) -> list[str]:
                         if fn:
                             allowed.add(str(fn))
 
-    return sorted(allowed)
+    return sorted(allowed), sorted(collections)
 
 
 @app.post("/api/chat")
@@ -251,10 +299,13 @@ def chat(request: ChatRequest):
         safe_user = _safe_user_id(request.user_id)
         profile = _get_user_profile(safe_user)
         history = _get_recent_chat_history(safe_user, request.session_id)
-        allowed_sources = _get_allowed_sources(safe_user)
-        preferred_sources = [s for s in (request.preferred_sources or []) if isinstance(s, str)]
+        allowed_sources, allowed_collections = _get_allowed_sources_and_collections(safe_user)
+        preferred_sources = _sanitize_preferred_sources(request.preferred_sources, allowed_sources)
+        safe_message = _sanitize_chat_message(request.message)
+        if not safe_message:
+            raise HTTPException(status_code=400, detail="Empty or invalid message")
         enriched_message = _build_personalized_prompt(
-            request.message,
+            safe_message,
             profile,
             history,
             allowed_sources=allowed_sources,
@@ -266,13 +317,25 @@ def chat(request: ChatRequest):
             user_id=safe_user,
             session_id=request.session_id,
             allowed_sources=allowed_sources,
+            allowed_collections=allowed_collections,
             preferred_sources=preferred_sources,
         )
 
-        _save_chat_message(safe_user, request.session_id, "user", request.message)
-        _save_chat_message(safe_user, request.session_id, "assistant", response)
+        state = get_last_state() or {}
+        sources = state.get("sources", []) if isinstance(state, dict) else []
+        if not isinstance(sources, list):
+            sources = []
 
-        return {"reply": response}
+        _save_chat_message(safe_user, request.session_id, "user", safe_message)
+        _save_chat_message(
+            safe_user,
+            request.session_id,
+            "assistant",
+            response,
+            citations=[str(s) for s in sources if str(s).strip()],
+        )
+
+        return {"reply": response, "sources": sources}
     except Exception as e:
         logger.exception("Chat error")
         raise HTTPException(status_code=500, detail=f"Agent encountered an error: {str(e)}")
@@ -631,10 +694,14 @@ async def chat_stream(request: ChatRequest):
             safe_user = _safe_user_id(request.user_id)
             profile = _get_user_profile(safe_user)
             history = _get_recent_chat_history(safe_user, request.session_id)
-            allowed_sources = _get_allowed_sources(safe_user)
-            preferred_sources = [s for s in (request.preferred_sources or []) if isinstance(s, str)]
+            allowed_sources, allowed_collections = _get_allowed_sources_and_collections(safe_user)
+            preferred_sources = _sanitize_preferred_sources(request.preferred_sources, allowed_sources)
+            safe_message = _sanitize_chat_message(request.message)
+            if not safe_message:
+                yield "\n[ERROR] Empty or invalid message"
+                return
             enriched_message = _build_personalized_prompt(
-                request.message,
+                safe_message,
                 profile,
                 history,
                 allowed_sources=allowed_sources,
@@ -647,6 +714,7 @@ async def chat_stream(request: ChatRequest):
                 "session_id": request.session_id,
                 "sources": [],
                 "allowed_sources": allowed_sources,
+                "allowed_collections": allowed_collections,
                 "preferred_sources": preferred_sources,
                 "memory_block": "",
                 "summary_block": "",
@@ -666,6 +734,8 @@ async def chat_stream(request: ChatRequest):
                 if kind == "on_chain_start":
                     if name == "load_memory":
                         yield '__STEP__:Loading memory context...\n'
+                    elif name == "guardrail_input":
+                        yield '__STEP__:Checking content safety...\n'
                     elif name == "router":
                         yield '__STEP__:Analyzing intent...\n'
                     elif name == "retrieval":
@@ -677,28 +747,31 @@ async def chat_stream(request: ChatRequest):
                 
                 elif kind == "on_chain_end":
                     output = event.get("data", {}).get("output")
-                    if isinstance(output, dict) and "messages" in output:
-                        messages = output.get("messages", [])
-                        for msg in reversed(messages):
-                            if getattr(msg, "type", "") == "ai" and not getattr(msg, "tool_calls", None):
-                                final_answer = msg.content or ""
-                                sources = output.get("sources", [])
-                                break
-
-            # Append sources if needed
-            low_confidence_markers = (
-                "Mình chưa thấy đủ thông tin đáng tin trong tài liệu",
-                "tra cứu lại chính xác hơn",
-            )
-            is_low_confidence_reply = any(marker in final_answer for marker in low_confidence_markers)
-            if sources and "sources:" not in final_answer.lower() and not is_low_confidence_reply:
-                source_block = "\nSources:\n" + "\n".join(f"- {s}" for s in sources)
-                final_answer = final_answer.rstrip() + source_block
+                    if isinstance(output, dict):
+                        # Check for final_answer in state (e.g., from guardrail rejection)
+                        if "final_answer" in output and output["final_answer"]:
+                            final_answer = output["final_answer"]
+                            sources = output.get("sources", [])
+                        
+                        # Also check messages for normal flow
+                        if "messages" in output:
+                            messages = output.get("messages", [])
+                            for msg in reversed(messages):
+                                if getattr(msg, "type", "") == "ai" and not getattr(msg, "tool_calls", None):
+                                    final_answer = msg.content or ""
+                                    sources = output.get("sources", [])
+                                    break
 
             text = final_answer or ""
 
-            _save_chat_message(safe_user, request.session_id, "user", request.message)
-            _save_chat_message(safe_user, request.session_id, "assistant", text)
+            _save_chat_message(safe_user, request.session_id, "user", safe_message)
+            _save_chat_message(
+                safe_user,
+                request.session_id,
+                "assistant",
+                text,
+                citations=[str(s) for s in sources if str(s).strip()],
+            )
 
             yield '__STEP__:Done\n'
 
@@ -708,6 +781,9 @@ async def chat_stream(request: ChatRequest):
                 chunk = (word + " ") if i < len(words) - 1 else word
                 yield f"__CHUNK__:{chunk}\n"
                 await asyncio.sleep(0.015)
+
+            if sources:
+                yield f"__SOURCES__:{json.dumps(sources, ensure_ascii=False)}\n"
         except Exception as e:
             logger.exception("Chat stream error")
             yield f"\n[ERROR] Agent encountered an error: {str(e)}"
@@ -1265,6 +1341,8 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
         ext = target_path.suffix.lower()
         if ext == ".pdf":
             docs = PyMuPDFLoader(str(target_path)).load()
+        elif ext == ".docx":
+            docs = Docx2txtLoader(str(target_path)).load()
         elif ext in {".txt", ".md"}:
             docs = TextLoader(str(target_path), encoding="utf-8").load()
         else:
@@ -1372,11 +1450,21 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
 
     target_path.write_bytes(content)
 
+    _save_upload_metadata(
+        user_id=safe_user,
+        file_id=file_id,
+        original_filename=safe_name,
+        stored_path=str(target_path),
+        size_bytes=len(content),
+    )
+
     # Ingest uploaded file into user-scoped RAG collection
     try:
         ext = target_path.suffix.lower()
         if ext == ".pdf":
             docs = PyMuPDFLoader(str(target_path)).load()
+        elif ext == ".docx":
+            docs = Docx2txtLoader(str(target_path)).load()
         elif ext in {".txt", ".md"}:
             docs = TextLoader(str(target_path), encoding="utf-8").load()
         else:
@@ -1398,13 +1486,6 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
     except Exception as e:
         logger.exception("RAG ingest failed for uploaded file")
         raise HTTPException(status_code=500, detail=f"Upload saved but RAG ingest failed: {str(e)}")
-    _save_upload_metadata(
-        user_id=safe_user,
-        file_id=file_id,
-        original_filename=safe_name,
-        stored_path=str(target_path),
-        size_bytes=len(content),
-    )
 
     return {
         "ok": True,
@@ -1446,6 +1527,89 @@ def download_upload(file_id: str = "", user_id: str = ""):
         filename=str(target.get("filename") or stored_path.name),
         media_type="application/octet-stream",
     )
+
+
+def _delete_upload_metadata_and_file(user_id: str, file_id: str) -> dict:
+    headers = _supabase_headers()
+    lookup_url = (
+        f"{SUPABASE_URL}/rest/v1/uploads"
+        f"?user_id=eq.{_encode_eq(user_id)}"
+        f"&file_id=eq.{_encode_eq(file_id)}"
+        f"&select=file_id,original_filename,stored_path"
+        f"&limit=1"
+    )
+
+    with httpx.Client(timeout=15.0) as client:
+        lookup_resp = client.get(lookup_url, headers=headers)
+    if lookup_resp.status_code >= 300:
+        raise HTTPException(status_code=500, detail=f"Failed to lookup upload: {lookup_resp.text}")
+
+    rows = lookup_resp.json()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Upload not found")
+
+    row = rows[0]
+    original_filename = str(row.get("original_filename") or "")
+    stored_path_raw = str(row.get("stored_path") or "")
+
+    # 1) Delete metadata row
+    delete_url = (
+        f"{SUPABASE_URL}/rest/v1/uploads"
+        f"?user_id=eq.{_encode_eq(user_id)}"
+        f"&file_id=eq.{_encode_eq(file_id)}"
+    )
+    with httpx.Client(timeout=15.0) as client:
+        delete_resp = client.delete(delete_url, headers=headers)
+    if delete_resp.status_code >= 300:
+        raise HTTPException(status_code=500, detail=f"Failed to delete upload metadata: {delete_resp.text}")
+
+    # 2) Delete physical file (best effort)
+    file_deleted = False
+    if stored_path_raw:
+        try:
+            p = Path(stored_path_raw).resolve()
+            if p.exists() and p.is_file():
+                p.unlink()
+                file_deleted = True
+        except Exception:
+            logger.warning("Failed to remove stored upload file path=%s", stored_path_raw, exc_info=True)
+
+    # 3) Purge chunks from user's vectorstore by source filename (best effort)
+    vector_deleted = False
+    if original_filename:
+        try:
+            vectorstore = get_vectorstore(user_id=user_id)
+            collection = getattr(vectorstore, "_collection", None)
+            if collection is not None:
+                collection.delete(where={"source": original_filename})
+                vector_deleted = True
+        except Exception:
+            logger.warning(
+                "Failed to purge vector chunks user=%s source=%s",
+                user_id,
+                original_filename,
+                exc_info=True,
+            )
+
+    return {
+        "file_id": file_id,
+        "filename": original_filename,
+        "stored_path": stored_path_raw,
+        "file_deleted": file_deleted,
+        "vector_deleted": vector_deleted,
+    }
+
+
+@app.delete("/api/uploads/{file_id}")
+def delete_upload(file_id: str, user_id: str = ""):
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Missing user_id")
+    if not file_id:
+        raise HTTPException(status_code=400, detail="Missing file_id")
+
+    safe_user = _safe_user_id(user_id)
+    result = _delete_upload_metadata_and_file(safe_user, file_id)
+    return {"ok": True, "user_id": safe_user, "deleted": result}
 
 
 @app.get("/api/health")

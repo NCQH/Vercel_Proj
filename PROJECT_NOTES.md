@@ -21,7 +21,8 @@
 ## Ghi chú vận hành
 - Dev servers đang dùng:
   - `npm run dev`
-  - `uvicorn api.index:app --reload --port 8000`
+  - `npm run dev:backend` (hoặc `uvicorn api.index:app --reload --reload-dir api --port 8000`)
+    - *Lưu ý: Thêm `--reload-dir api` để tránh việc backend tự động reload mỗi khi upload file mới vào thư mục `data`.*
 
 ## TODO bạn có thể chỉnh ở đây
 - Lecture sẽ có thể tạo các lớp học, chỉnh sửa thông tin lớp học

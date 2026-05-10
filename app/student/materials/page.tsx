@@ -30,6 +30,8 @@ export default function StudentMaterialsPage() {
   const [selectedClassId, setSelectedClassId] = useState("");
   const [classFiles, setClassFiles] = useState<ClassFile[]>([]);
   const [personalUploads, setPersonalUploads] = useState<PersonalUpload[]>([]);
+  const [deletingFileId, setDeletingFileId] = useState("");
+  const [deleteMessage, setDeleteMessage] = useState("");
   const [error, setError] = useState("");
 
   const identity =
@@ -164,6 +166,31 @@ export default function StudentMaterialsPage() {
     await loadApprovedClassFiles(membershipItems);
   };
 
+  const deletePersonalUpload = async (fileId: string, filename: string) => {
+    if (!identity || !fileId || deletingFileId) return;
+    const confirmed = window.confirm(`Delete "${filename}"?\n\nFile will be removed from your uploads and AI retrieval context.`);
+    if (!confirmed) return;
+
+    setDeleteMessage("");
+    setDeletingFileId(fileId);
+    try {
+      const res = await fetch(`/api/uploads/${encodeURIComponent(fileId)}?user_id=${encodeURIComponent(identity)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDeleteMessage(data?.detail || "Delete failed. Please try again.");
+        return;
+      }
+      setDeleteMessage(`Deleted ${filename}. AI will no longer retrieve this file.`);
+      await loadPersonalUploads();
+    } catch {
+      setDeleteMessage("Delete failed due to network error.");
+    } finally {
+      setDeletingFileId("");
+    }
+  };
+
   if (status === "loading") return <MainLayout role="student"><div className="p-8">Loading...</div></MainLayout>;
 
   return (
@@ -251,14 +278,38 @@ export default function StudentMaterialsPage() {
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white p-6">
-          <h2 className="text-xl font-semibold text-slate-900">My Uploaded Files</h2>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">My Uploaded Files</h2>
+              <p className="mt-1 text-xs text-slate-500">Delete files you no longer want AI to use for retrieval.</p>
+            </div>
+            {deletingFileId ? <span className="text-xs font-bold text-rose-600">Deleting...</span> : null}
+          </div>
+          {deleteMessage ? (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
+              {deleteMessage}
+            </div>
+          ) : null}
           <div className="mt-3 space-y-2">
-            {personalUploads.map((f) => (
-              <div key={f.file_id} className="group flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
-                <span className="font-bold text-slate-900 text-sm truncate">{f.filename}</span>
-                <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition opacity-0 group-hover:opacity-100 shrink-0">Download</a>
-              </div>
-            ))}
+            {personalUploads.map((f) => {
+              const busy = deletingFileId === f.file_id;
+              return (
+                <div key={f.file_id} className="group flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
+                  <span className="font-bold text-slate-900 text-sm truncate">{f.filename}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition opacity-0 group-hover:opacity-100">Download</a>
+                    <button
+                      id={`delete-personal-file-${f.file_id}`}
+                      onClick={() => deletePersonalUpload(f.file_id, f.filename)}
+                      disabled={Boolean(deletingFileId)}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition ${busy ? "bg-rose-100 text-rose-500 cursor-not-allowed" : "bg-rose-50 text-rose-700 hover:bg-rose-100"}`}
+                    >
+                      {busy ? "Deleting..." : "Delete"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
             {personalUploads.length === 0 ? <p className="text-sm text-slate-500 font-medium px-2">No personal uploaded files yet.</p> : null}
           </div>
         </div>

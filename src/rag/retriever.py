@@ -9,6 +9,15 @@ import os
 from dotenv import load_dotenv
 from src.memory.memory_service import load_memory, save_memory
 
+
+def _distance_to_relevance(raw_score: float) -> float:
+    """Convert distance-like score to relevance score where higher is better."""
+    try:
+        value = float(raw_score)
+    except (TypeError, ValueError):
+        return 0.0
+    return 1.0 / (1.0 + max(value, 0.0))
+
 load_dotenv()  # Load environment variables from .env file
 
 def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "default") -> List[Dict[str, Any]]:
@@ -35,10 +44,12 @@ def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "defaul
     chunks = []
 
     for doc, score in results:
+        raw_score = float(score)
         chunks.append({
             "text": doc.page_content,
             "metadata": doc.metadata,
-            "score": float(score)
+            "score": raw_score,
+            "relevance_score": _distance_to_relevance(raw_score),
         })
 
     return chunks
@@ -103,10 +114,12 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "defau
 
     results: List[Dict[str, Any]] = []
     for idx in top_indices:
+        sparse_score = float(scores[idx])
         results.append({
             "text": docs[idx],
             "metadata": metas[idx] if idx < len(metas) else {},
-            "score": float(scores[idx])
+            "score": sparse_score,
+            "relevance_score": sparse_score,
         })
 
     return results
@@ -182,6 +195,7 @@ def retrieve_hybrid(
         score = rrf(info["dense_rank"], info["sparse_rank"])
         chunk = dict(info["chunk"])
         chunk["score"] = float(score)
+        chunk["relevance_score"] = float(score)
         scored.append(chunk)
 
     scored.sort(key=lambda x: x["score"], reverse=True)
@@ -263,7 +277,7 @@ def rerank(
     # sort by relevance
     candidates = sorted(
         candidates,
-        key=lambda x: x["rerank_score"],
+        key=lambda x: x.get("rerank_score", x.get("relevance_score", x.get("score", 0.0))),
         reverse=True
     )
 
@@ -499,7 +513,7 @@ def rag_answer(
     # -----------------------
     candidates = sorted(
         candidates,
-        key=lambda x: x.get("rerank_score", x.get("score", 0.0)),
+        key=lambda x: x.get("rerank_score", x.get("relevance_score", x.get("score", 0.0))),
         reverse=True
     )
 

@@ -87,7 +87,10 @@ def _is_academic_question(question: str) -> bool:
 def _max_retrieval_score(chunks: List[dict]) -> float:
     if not chunks:
         return 0.0
-    return max(float(c.get("rerank_score", c.get("score", 0.0)) or 0.0) for c in chunks)
+    return max(
+        float(c.get("rerank_score", c.get("relevance_score", c.get("score", 0.0))) or 0.0)
+        for c in chunks
+    )
 
 
 def generate_answer(question: str, chunks: List[dict]) -> Dict[str, str | List[str]]:
@@ -99,7 +102,7 @@ def generate_answer(question: str, chunks: List[dict]) -> Dict[str, str | List[s
     for chunk in chunks or []:
         meta = chunk.get("metadata") or {}
         source = str(meta.get("source") or "unknown")
-        score = float(chunk.get("rerank_score", chunk.get("score", 0.0)) or 0.0)
+        score = float(chunk.get("rerank_score", chunk.get("relevance_score", chunk.get("score", 0.0))) or 0.0)
         sources_with_scores.append((source, score))
 
     unique_sources = sorted({src for src, _ in sources_with_scores})
@@ -114,16 +117,25 @@ def generate_answer(question: str, chunks: List[dict]) -> Dict[str, str | List[s
     )
 
     # Policy: study-related question should retrieve first.
-    # If retrieval confidence is low, answer with explicit uncertainty.
-    if is_academic and max_score < 0.01:
-        logger.info("[TUTOR] low confidence fallback triggered threshold=0.01")
+    # If retrieval confidence is low and evidence is too thin, answer with explicit uncertainty.
+    if is_academic and max_score < 0.03 and len(chunks or []) < 2:
+        logger.info("[TUTOR] low confidence fallback triggered threshold=0.03 min_chunks=2")
         return {"answer": _LOW_CONFIDENCE_REPLY, "used_sources": []}
 
     if not context:
         logger.info("[TUTOR] no context, use direct tutor prompt")
         prompt = f"""Bạn là AI Teaching Assistant thân thiện.
-Hãy trả lời tự nhiên, dễ hiểu, đúng trọng tâm cho câu hỏi sau.
-Nếu cần, có thể nêu giả định rõ ràng và gợi ý người học hỏi rõ hơn.
+Hãy trả lời bằng tiếng Việt tự nhiên, rõ ràng, ngắn gọn đúng trọng tâm.
+
+Định dạng bắt buộc:
+1) TL;DR (1-2 câu)
+2) Giải thích chính (2-5 gạch đầu dòng)
+3) Ví dụ ngắn (nếu hữu ích, tối đa 3 dòng)
+
+Quy tắc:
+- Không lặp boilerplate kiểu "nếu bạn muốn tìm hiểu thêm..." ở mọi câu trả lời.
+- Chỉ đặt câu hỏi gợi mở ở cuối khi thật sự còn mơ hồ hoặc thiếu dữ liệu.
+- Không bịa thông tin; nếu chưa chắc, nói rõ mức độ chắc chắn.
 
 Question: {question}
 """
@@ -134,13 +146,18 @@ Question: {question}
     prompt = f"""Bạn là AI Teaching Assistant.
 Mục tiêu: hỗ trợ người học theo cách tự nhiên, rõ ràng, không máy móc.
 
+Định dạng bắt buộc:
+1) TL;DR (1-2 câu)
+2) Giải thích chính (3-6 gạch đầu dòng)
+3) Ví dụ ngắn hoặc ứng dụng (nếu phù hợp, tối đa 4 dòng)
+
 Nguyên tắc trả lời:
 - Ưu tiên bám vào context khi có thông tin liên quan.
 - Có thể diễn giải linh hoạt để người học dễ hiểu.
 - Nếu context chưa đủ cho một phần câu hỏi, nói rõ phần nào chưa chắc chắn.
 - Không được bịa nguồn hay khẳng định chắc khi không có bằng chứng.
-- Có thể đưa ví dụ ngắn nếu giúp làm rõ ý.
 - Khi dùng thông tin từ context, chèn chỉ số chunk liên quan dạng [n] ngay sau ý đó (ví dụ: ... [2]).
+- Không lặp boilerplate kiểu "nếu bạn muốn tìm hiểu thêm..." trừ khi thật sự cần câu hỏi làm rõ.
 
 Context:
 {context}
@@ -152,17 +169,33 @@ Question: {question}
 
     # Map cited chunk indices [n] in answer -> source filenames
     cited_indices = {int(m.group(1)) for m in re.finditer(r"\[(\d+)\]", answer)}
-    used_sources: List[str] = []
+    seen_files: dict[str, int] = {}
     for idx in sorted(cited_indices):
         if 1 <= idx <= len(chunks):
             src = str((chunks[idx - 1].get("metadata") or {}).get("source") or "")
-            if src and src not in used_sources:
-                used_sources.append(src)
+            if src:
+                base = src.rsplit("/", 1)[-1]
+                if base not in seen_files:
+                    seen_files[base] = idx
 
-    # Fallback: if model omitted markers but used context answer, keep top-1 source only.
+    used_sources = [f"[{idx}] {filename}" for filename, idx in sorted(seen_files.items(), key=lambda x: x[1])]
+
+    # Fallback: if model omitted markers but context answer exists, keep answer with warning.
     if not used_sources and chunks:
-        src = str((chunks[0].get("metadata") or {}).get("source") or "")
-        if src:
-            used_sources = [src]
+        fallback_sources = []
+        seen_fallback: set[str] = set()
+        for i, c in enumerate(chunks[:2], start=1):
+            src = str((c.get("metadata") or {}).get("source") or "")
+            if not src:
+                continue
+            base = src.rsplit("/", 1)[-1]
+            if base not in seen_fallback:
+                fallback_sources.append(f"[{i}] {base}")
+                seen_fallback.add(base)
+        used_sources = fallback_sources
+        warning_note = "⚠️ Lưu ý: Trả lời dưới đây dựa trên ngữ cảnh truy xuất, nhưng mô hình chưa chèn chỉ mục trích dẫn [n] rõ ràng."
+        if warning_note not in answer:
+            answer = f"{warning_note}\n\n{answer}"
+        logger.warning("[TUTOR] missing citation markers -> auto-attach top sources=%s", used_sources)
 
     return {"answer": answer, "used_sources": used_sources}

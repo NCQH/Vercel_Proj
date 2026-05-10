@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "next dev",
+    "dev:backend": "uvicorn api.index:app --reload --reload-dir api --port 8000",
     "build": "next build",
     "start": "next start"
   },

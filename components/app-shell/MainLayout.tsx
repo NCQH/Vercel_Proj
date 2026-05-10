@@ -169,31 +169,6 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
               );
             })}
           </nav>
-
-          {role === "student" ? (
-            <div className="mt-auto rounded-2xl bg-white p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)] border border-slate-100 mx-1">
-              <p className="text-sm font-bold flex items-center gap-2 text-slate-800">
-                🔥 Weekly Progress
-              </p>
-              <div className="mt-3 space-y-1.5 text-xs font-medium text-slate-500">
-                <div className="flex justify-between items-center">
-                  <span>Studied</span>
-                  <span className="text-slate-900 font-bold">8h this week</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span>Topics</span>
-                  <span className="text-slate-900 font-bold">3 completed</span>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-auto rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-[0_2px_8px_rgba(15,23,42,0.04)] mx-1">
-              <p className="font-bold text-slate-900">Need help?</p>
-              <p className="mt-1.5 text-xs leading-5 text-slate-600">
-                Check roadmap topics for your next review session.
-              </p>
-            </div>
-          )}
         </aside>
 
         <div className="flex flex-1 flex-col">
@@ -211,7 +186,7 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
                   {role === "student" ? (
                     <>
                       <p className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                        Good evening, {profileFullName?.split(' ')[0] || session?.user?.name?.split(' ')[0] || 'Student'} 👋
+                        Hi, {profileFullName || session?.user?.name || 'Student'} 👋
                       </p>
                       <p className="text-sm font-medium text-slate-500 mt-0.5">
                         Continue your ML journey
@@ -229,20 +204,6 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
                   )}
                 </div>
               </div>
-
-              {role === "student" && (
-                <div className="hidden md:flex items-center gap-3 ml-auto mr-6 text-sm font-bold">
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-orange-50 text-orange-600 border border-orange-100">
-                    🔥 <span className="font-semibold">5-day streak</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
-                    📘 <span className="font-semibold">12 lessons</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
-                    ⏱ <span className="font-semibold">8h this week</span>
-                  </div>
-                </div>
-              )}
 
               {/* Account button - same style as original StudentChat button */}
               <div className={`relative ${role !== "student" ? "ml-auto" : ""} mr-2`} ref={accountMenuRef}>

@@ -11,8 +11,9 @@ type Message = {
   id: string;
   role: string;
   text: string;
-  citations?: any[];
+  citations?: string[];
 };
+
 
 type UserProfile = {
   full_name: string;
@@ -74,6 +75,52 @@ export default function StudentChat() {
   const [roadmapItems, setRoadmapItems] = useState<RoadmapItemPreview[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const loadSources = async () => {
+    const identity =
+      (session?.user as { id?: string } | undefined)?.id ||
+      session?.user?.email ||
+      session?.user?.name ||
+      "";
+    if (!identity) return;
+    try {
+      const [membershipsRes, uploadsRes] = await Promise.all([
+        fetch(`/api/classes?user_id=${encodeURIComponent(identity)}&role=student`, { cache: "no-store" }),
+        fetch(`/api/uploads?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" }),
+      ]);
+
+      const membershipsData = membershipsRes.ok ? await membershipsRes.json() : { items: [] };
+      const uploadsData = uploadsRes.ok ? await uploadsRes.json() : { items: [] };
+
+      const approvedClasses = (membershipsData.items || [])
+        .filter((m: { status?: string; class?: { id?: string; name?: string } }) => m.status === "approved" && m.class?.id)
+        .map((m: { class: { id: string; name?: string } }) => ({ id: m.class.id, name: m.class.name || "Unknown class" }));
+
+      const classFileResults = await Promise.all(
+        approvedClasses.map(async (c: { id: string; name: string }) => {
+          const res = await fetch(`/api/class-files?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(c.id)}`, { cache: "no-store" });
+          const data = res.ok ? await res.json() : { items: [] };
+          const files = (data.items || []).map((f: { original_filename?: string }) => String(f.original_filename || "")).filter(Boolean);
+          return { id: `class:${c.id}`, label: c.name, files } as SourceGroup;
+        })
+      );
+
+      const myUploadFiles = (uploadsData.items || [])
+        .map((f: { original_filename?: string; filename?: string }) =>
+          String(f.original_filename || f.filename || "")
+        )
+        .filter(Boolean);
+
+      const groups: SourceGroup[] = [
+        ...classFileResults.filter((g) => g.files.length > 0),
+        { id: "personal", label: "My uploads", files: myUploadFiles },
+      ].filter((g) => g.files.length > 0);
+
+      setSourceGroups(groups);
+    } catch (error) {
+      console.error("Failed to load chat sources", error);
+    }
+  };
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -138,49 +185,7 @@ export default function StudentChat() {
       }
     };
 
-    const loadSources = async () => {
-      const identity =
-        (session?.user as { id?: string } | undefined)?.id ||
-        session?.user?.email ||
-        session?.user?.name ||
-        "";
-      if (!identity) return;
-      try {
-        const [membershipsRes, uploadsRes] = await Promise.all([
-          fetch(`/api/classes?user_id=${encodeURIComponent(identity)}&role=student`, { cache: "no-store" }),
-          fetch(`/api/uploads?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" }),
-        ]);
 
-        const membershipsData = membershipsRes.ok ? await membershipsRes.json() : { items: [] };
-        const uploadsData = uploadsRes.ok ? await uploadsRes.json() : { items: [] };
-
-        const approvedClasses = (membershipsData.items || [])
-          .filter((m: { status?: string; class?: { id?: string; name?: string } }) => m.status === "approved" && m.class?.id)
-          .map((m: { class: { id: string; name?: string } }) => ({ id: m.class.id, name: m.class.name || "Unknown class" }));
-
-        const classFileResults = await Promise.all(
-          approvedClasses.map(async (c: { id: string; name: string }) => {
-            const res = await fetch(`/api/class-files?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(c.id)}`, { cache: "no-store" });
-            const data = res.ok ? await res.json() : { items: [] };
-            const files = (data.items || []).map((f: { original_filename?: string }) => String(f.original_filename || "")).filter(Boolean);
-            return { id: `class:${c.id}`, label: c.name, files } as SourceGroup;
-          })
-        );
-
-        const myUploadFiles = (uploadsData.items || [])
-          .map((f: { filename?: string }) => String(f.filename || ""))
-          .filter(Boolean);
-
-        const groups: SourceGroup[] = [
-          ...classFileResults.filter((g) => g.files.length > 0),
-          { id: "personal", label: "My uploads", files: myUploadFiles },
-        ].filter((g) => g.files.length > 0);
-
-        setSourceGroups(groups);
-      } catch (error) {
-        console.error("Failed to load chat sources", error);
-      }
-    };
 
     const loadRoadmapPreview = async () => {
       const identity =
@@ -246,13 +251,18 @@ export default function StudentChat() {
           return;
         }
 
-        setMessages(
-          historyItems.map((item, idx) => ({
-            id: `h-${idx + 1}`,
-            role: item.role === "assistant" ? "assistant" : "user",
-            text: item.content || "",
-          }))
-        );
+        const mappedHistory = historyItems.map((item, idx) => ({
+          id: `h-${idx + 1}`,
+          role: item.role === "assistant" ? "assistant" : "user",
+          text: item.content || "",
+          citations: Array.isArray((item as { citations?: unknown }).citations)
+            ? ((item as { citations?: unknown[] }).citations || [])
+              .map((c) => String(c || "").trim())
+              .filter(Boolean)
+            : [],
+        })) as Message[];
+
+        setMessages(mappedHistory);
       } catch (error) {
         console.error("Failed to load chat history", error);
       } finally {
@@ -303,7 +313,7 @@ export default function StudentChat() {
       };
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
 
       const response = await fetch("/api/chat/stream", {
         method: "POST",
@@ -337,6 +347,9 @@ export default function StudentChat() {
 
         const fallbackJson = await fallback.json();
         const fallbackReply = String(fallbackJson?.reply || "").trim() || "Agent did not return a response.";
+        const fallbackSources = Array.isArray(fallbackJson?.sources)
+          ? fallbackJson.sources.map((s: unknown) => String(s || "").trim()).filter(Boolean)
+          : [];
         setMessages((current) => {
           const next = [...current];
           const lastAssistantIndex = [...next]
@@ -347,6 +360,7 @@ export default function StudentChat() {
           next[lastAssistantIndex] = {
             ...next[lastAssistantIndex],
             text: fallbackReply,
+            citations: fallbackSources,
           };
           return next;
         });
@@ -360,6 +374,7 @@ export default function StudentChat() {
       let pendingText = "";
       let streamDone = false;
       let rawBuffer = "";
+      let streamedSources: string[] = [];
       let lastRenderedDisplay = "";
 
       const flushTimer = setInterval(() => {
@@ -402,16 +417,27 @@ export default function StudentChat() {
         rawBuffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (line.startsWith("__STEP__:_") || line.startsWith("__STEP__:__") || line.startsWith("__STEP__:___") || line.startsWith("__STEP__:")) {
-            const stepName = line.replace("__STEP__:", "").trim();
+          const normalized = line.trimStart();
+          if (normalized.startsWith("__STEP__:")) {
+            const stepName = normalized.replace("__STEP__:", "").trim();
             if (stepName !== "Done") {
               stepText = stepName;
             }
-          } else if (line.startsWith("__CHUNK__:__") || line.startsWith("__CHUNK__:___") || line.startsWith("__CHUNK__:")) {
-            pendingText += line.replace("__CHUNK__:", "");
-          } else if (line.trim().length > 0) {
+          } else if (normalized.startsWith("__CHUNK__:")) {
+            pendingText += normalized.replace("__CHUNK__:", "");
+          } else if (normalized.startsWith("__SOURCES__:")) {
+            const rawSources = normalized.replace("__SOURCES__:", "").trim();
+            try {
+              const parsed = JSON.parse(rawSources);
+              if (Array.isArray(parsed)) {
+                streamedSources = parsed.map((s) => String(s || "").trim()).filter(Boolean);
+              }
+            } catch {
+              // ignore malformed source payload
+            }
+          } else if (normalized.trim().length > 0) {
             // Fallback for non-protocol lines (e.g. errors)
-            pendingText += line + "\n";
+            pendingText += normalized + "\n";
           }
         }
       }
@@ -420,10 +446,21 @@ export default function StudentChat() {
       if (rawBuffer.trim()) {
         let lines = rawBuffer.split('\n');
         for (const line of lines) {
-          if (line.startsWith("__CHUNK__:__") || line.startsWith("__CHUNK__:___") || line.startsWith("__CHUNK__:")) {
-            pendingText += line.replace("__CHUNK__:", "");
-          } else if (line.trim().length > 0) {
-            pendingText += line + "\n";
+          const normalized = line.trimStart();
+          if (normalized.startsWith("__CHUNK__:")) {
+            pendingText += normalized.replace("__CHUNK__:", "");
+          } else if (normalized.startsWith("__SOURCES__:")) {
+            const rawSources = normalized.replace("__SOURCES__:", "").trim();
+            try {
+              const parsed = JSON.parse(rawSources);
+              if (Array.isArray(parsed)) {
+                streamedSources = parsed.map((s) => String(s || "").trim()).filter(Boolean);
+              }
+            } catch {
+              // ignore malformed source payload
+            }
+          } else if (normalized.trim().length > 0) {
+            pendingText += normalized + "\n";
           }
         }
       }
@@ -434,7 +471,9 @@ export default function StudentChat() {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
 
-      if (!renderedText.trim()) {
+      const finalText = renderedText.trim();
+
+      if (!finalText) {
         setMessages((current) => {
           const next = [...current];
           const lastAssistantIndex = [...next]
@@ -445,20 +484,41 @@ export default function StudentChat() {
           next[lastAssistantIndex] = {
             ...next[lastAssistantIndex],
             text: "Agent did not return a response.",
+            citations: streamedSources,
+          };
+          return next;
+        });
+      } else {
+        setMessages((current) => {
+          const next = [...current];
+          const lastAssistantIndex = [...next]
+            .map((m, idx) => ({ m, idx }))
+            .reverse()
+            .find(({ m }) => m.role === "assistant")?.idx;
+          if (lastAssistantIndex === undefined) return current;
+          next[lastAssistantIndex] = {
+            ...next[lastAssistantIndex],
+            text: finalText,
+            citations: streamedSources,
           };
           return next;
         });
       }
     } catch (error) {
       console.error(error);
-      setMessages((current) => [
-        ...current,
-        {
-          id: String(current.length + 1),
-          role: "assistant",
+      setMessages((current) => {
+        const next = [...current];
+        const lastAssistantIndex = [...next]
+          .map((m, idx) => ({ m, idx }))
+          .reverse()
+          .find(({ m }) => m.role === "assistant")?.idx;
+        if (lastAssistantIndex === undefined) return current;
+        next[lastAssistantIndex] = {
+          ...next[lastAssistantIndex],
           text: "Connection error to Agent API. Please try again.",
-        },
-      ]);
+        };
+        return next;
+      });
     } finally {
       const identity =
         (session?.user as { id?: string } | undefined)?.id ||
@@ -504,6 +564,16 @@ export default function StudentChat() {
     }
 
     setIsUploading(true);
+    const tempId = `upload-${Date.now()}`;
+    setMessages((current) => [
+      ...current,
+      {
+        id: tempId,
+        role: "assistant",
+        text: `⏳ Uploading ${file.name}...`,
+      },
+    ]);
+
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -517,28 +587,56 @@ export default function StudentChat() {
       if (!response.ok) throw new Error("Upload failed");
       const result = await response.json();
 
-      setMessages((current) => [
-        ...current,
-        {
-          id: String(current.length + 1),
-          role: "assistant",
-          text: `Uploaded: ${result.filename} (${Math.round(result.size / 1024)} KB).`,
-        },
-      ]);
+      setMessages((current) =>
+        current.map((msg) =>
+          msg.id === tempId
+            ? {
+              ...msg,
+              text: `✅ Uploaded: ${result.filename} (${Math.round(result.size / 1024)} KB).`,
+            }
+            : msg
+        )
+      );
+      await loadSources();
+      if (result.filename) {
+        setPreferredSources((current) => {
+          if (!current.includes(result.filename)) {
+            return [...current, result.filename];
+          }
+          return current;
+        });
+      }
     } catch (error) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: String(current.length + 1),
-          role: "assistant",
-          text: "File upload failed. Please try again.",
-        },
-      ]);
+      setMessages((current) =>
+        current.map((msg) =>
+          msg.id === tempId
+            ? {
+              ...msg,
+              text: `❌ File upload failed for ${file.name}. Please try again.`,
+            }
+            : msg
+        )
+      );
     } finally {
       setIsUploading(false);
       if (event.target) event.target.value = "";
     }
   };
+
+  useEffect(() => {
+    const identity =
+      (session?.user as { id?: string } | undefined)?.id ||
+      session?.user?.email ||
+      session?.user?.name ||
+      "";
+    if (!identity || !chatSessionId) return;
+    try {
+      const cacheKey = `chat_messages_${identity}_${chatSessionId}`;
+      localStorage.setItem(cacheKey, JSON.stringify(messages));
+    } catch {
+      // ignore storage quota / serialize errors
+    }
+  }, [messages, session, chatSessionId]);
 
   if (status === "unauthenticated") {
     return (
