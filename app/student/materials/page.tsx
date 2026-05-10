@@ -181,12 +181,25 @@ export default function StudentMaterialsPage() {
             <div className="mt-3 space-y-2">
               {publicClasses.map((c) => {
                 const isApproved = memberships.some((m) => m.status === "approved" && m.class?.id === c.id);
+                const isPending = memberships.some((m) => m.status === "pending" && m.class?.id === c.id);
                 return (
-                <div key={c.id} className="rounded-xl border border-slate-200 px-3 py-2">
-                  <div className="font-medium text-slate-900">{c.name}</div>
-                  {!isApproved ? (
-                    <button id={`request-join-${c.id}`} onClick={() => requestJoin(c.code)} className="mt-2 rounded-lg bg-slate-900 px-3 py-1 text-xs text-white">Request Join</button>
-                  ) : null}
+                <div key={c.id} className="rounded-[24px] border border-slate-200 p-5 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:shadow-md transition">
+                  <div className="flex justify-between items-start gap-4">
+                     <div>
+                       <h3 className="font-bold text-slate-900 text-lg">{c.name}</h3>
+                       <div className="flex items-center gap-2 mt-1">
+                          <span className="text-xs font-bold text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md">{c.code}</span>
+                          <span className="text-xs text-slate-500">• {c.description || "Instructor / Details"}</span>
+                       </div>
+                     </div>
+                     {!isApproved && !isPending ? (
+                       <button id={`request-join-${c.id}`} onClick={() => requestJoin(c.code)} className="shrink-0 rounded-xl bg-slate-900 hover:bg-slate-800 px-4 py-2 text-xs font-bold text-white transition shadow-sm">Join Class</button>
+                     ) : isPending ? (
+                       <span className="shrink-0 rounded-xl bg-amber-50 text-amber-700 px-4 py-2 text-xs font-bold border border-amber-200">Pending</span>
+                     ) : (
+                       <span className="shrink-0 rounded-xl bg-emerald-50 text-emerald-700 px-4 py-2 text-xs font-bold border border-emerald-200">Joined ✓</span>
+                     )}
+                  </div>
                 </div>
                 );
               })}
@@ -197,11 +210,15 @@ export default function StudentMaterialsPage() {
             <h2 className="text-xl font-semibold text-slate-900">My Memberships</h2>
             <div className="mt-3 space-y-2">
               {memberships.map((m) => (
-                <button key={m.membership_id} id={`membership-${m.membership_id}`} onClick={() => m.class?.id && setSelectedClassId(m.class.id)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-left">
-                  <div className="font-medium text-slate-900">{m.class?.name || "Unknown class"}</div>
-                  <div className="text-xs text-slate-600">Status: {m.status}</div>
+                <button key={m.membership_id} id={`membership-${m.membership_id}`} onClick={() => m.class?.id && setSelectedClassId(m.class.id)} className={`w-full flex items-center justify-between rounded-[20px] border px-4 py-3 text-left transition hover:shadow-md ${selectedClassId === m.class?.id ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+                  <div>
+                     <div className="font-bold text-slate-900">{m.class?.name || "Unknown class"}</div>
+                     <div className="text-[11px] uppercase tracking-wider font-bold text-slate-500 mt-1">Status: <span className={`${m.status === 'approved' ? 'text-emerald-600' : 'text-amber-600'}`}>{m.status}</span></div>
+                  </div>
+                  {selectedClassId === m.class?.id && <div className="h-2 w-2 rounded-full bg-brand-600"></div>}
                 </button>
               ))}
+              {memberships.length === 0 && <p className="text-sm text-slate-500 p-4 text-center">You haven't joined any classes yet.</p>}
             </div>
           </div>
         </div>
@@ -210,15 +227,26 @@ export default function StudentMaterialsPage() {
           <h2 className="text-xl font-semibold text-slate-900">Approved Class Files</h2>
           <div className="mt-3 space-y-2">
             {classFiles.map((f) => (
-              <div key={`${f.class_id || "no-class"}-${f.file_id}`} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
-                <div>
-                  <div>{f.original_filename}</div>
-                  <div className="text-xs text-slate-500">Class: {f.class_name || "Unknown class"}</div>
+              <div key={`${f.class_id || "no-class"}-${f.file_id}`} className="group flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                  </div>
+                  <div>
+                    <div className="font-bold text-slate-900 text-sm">{f.original_filename}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5 uppercase tracking-wider font-bold">Class: {f.class_name || "Unknown class"}</div>
+                  </div>
                 </div>
-                <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-brand-700">Download</a>
+                <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center shrink-0">Download</a>
               </div>
             ))}
-            {classFiles.length === 0 ? <p className="text-sm text-slate-500">No accessible class files yet.</p> : null}
+            {classFiles.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 text-center rounded-[24px] border border-dashed border-slate-300 bg-slate-50">
+                <div className="text-4xl mb-3">📂</div>
+                <h3 className="font-bold text-slate-900 text-lg mb-1">No materials yet</h3>
+                <p className="text-sm text-slate-500 max-w-sm px-4">Join a class above to access lecture slides, practice exercises, and exam reviews.</p>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -226,12 +254,12 @@ export default function StudentMaterialsPage() {
           <h2 className="text-xl font-semibold text-slate-900">My Uploaded Files</h2>
           <div className="mt-3 space-y-2">
             {personalUploads.map((f) => (
-              <div key={f.file_id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
-                <span>{f.filename}</span>
-                <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-brand-700">Download</a>
+              <div key={f.file_id} className="group flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
+                <span className="font-bold text-slate-900 text-sm truncate">{f.filename}</span>
+                <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition opacity-0 group-hover:opacity-100 shrink-0">Download</a>
               </div>
             ))}
-            {personalUploads.length === 0 ? <p className="text-sm text-slate-500">No personal uploaded files yet.</p> : null}
+            {personalUploads.length === 0 ? <p className="text-sm text-slate-500 font-medium px-2">No personal uploaded files yet.</p> : null}
           </div>
         </div>
       </section>

@@ -62,10 +62,11 @@ export default function StudentChat() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(true);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [chatSessionId, setChatSessionId] = useState(createSessionId());
   const [sessions, setSessions] = useState<ChatSessionItem[]>([]);
-  const [showSessions, setShowSessions] = useState(false);
+  const [showSessions, setShowSessions] = useState(true);
   const [sourceGroups, setSourceGroups] = useState<SourceGroup[]>([]);
   const [preferredSources, setPreferredSources] = useState<string[]>([]);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
@@ -114,41 +115,6 @@ export default function StudentChat() {
         alert("Failed to load profile: " + String(error));
       } finally {
         setIsProfileLoading(false);
-      }
-    };
-
-    const loadHistory = async () => {
-      const identity =
-        (session?.user as { id?: string } | undefined)?.id ||
-        session?.user?.email ||
-        session?.user?.name ||
-        "";
-
-      if (!identity) return;
-
-      try {
-        const response = await fetch(
-          `/api/chat/history?user_id=${encodeURIComponent(identity)}&session_id=${encodeURIComponent(chatSessionId)}&limit=30`,
-          { cache: "no-store" }
-        );
-        if (!response.ok) return;
-
-        const payload = await response.json();
-        const historyItems = (payload?.items || []) as Array<{ role?: string; content?: string }>;
-        if (!historyItems.length) {
-          setMessages(initialMessages);
-          return;
-        }
-
-        setMessages(
-          historyItems.map((item, idx) => ({
-            id: `h-${idx + 1}`,
-            role: item.role === "assistant" ? "assistant" : "user",
-            text: item.content || "",
-          }))
-        );
-      } catch (error) {
-        console.error("Failed to load chat history", error);
       }
     };
 
@@ -244,7 +210,7 @@ export default function StudentChat() {
     const bootstrap = async () => {
       setIsBootstrapping(true);
       try {
-        await Promise.all([loadProfile(), loadHistory(), loadSessions(), loadSources(), loadRoadmapPreview()]);
+        await Promise.all([loadProfile(), loadSessions(), loadSources(), loadRoadmapPreview()]);
       } finally {
         setIsBootstrapping(false);
       }
@@ -252,6 +218,50 @@ export default function StudentChat() {
 
     if (status === "authenticated") {
       bootstrap();
+    }
+  }, [status, session]);
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      const identity =
+        (session?.user as { id?: string } | undefined)?.id ||
+        session?.user?.email ||
+        session?.user?.name ||
+        "";
+
+      if (!identity) return;
+
+      setIsLoadingHistory(true);
+      try {
+        const response = await fetch(
+          `/api/chat/history?user_id=${encodeURIComponent(identity)}&session_id=${encodeURIComponent(chatSessionId)}&limit=30`,
+          { cache: "no-store" }
+        );
+        if (!response.ok) return;
+
+        const payload = await response.json();
+        const historyItems = (payload?.items || []) as Array<{ role?: string; content?: string }>;
+        if (!historyItems.length) {
+          setMessages(initialMessages);
+          return;
+        }
+
+        setMessages(
+          historyItems.map((item, idx) => ({
+            id: `h-${idx + 1}`,
+            role: item.role === "assistant" ? "assistant" : "user",
+            text: item.content || "",
+          }))
+        );
+      } catch (error) {
+        console.error("Failed to load chat history", error);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+
+    if (status === "authenticated") {
+      loadHistory();
     }
   }, [status, session, chatSessionId]);
 
@@ -264,13 +274,15 @@ export default function StudentChat() {
       ? `\n\n[Tagged files: ${preferredSources.join(", ")}]`
       : "";
 
+    let stepText = "Initializing agent...";
+
     setMessages((current) => {
       const userId = String(current.length + 1);
       const assistantId = String(current.length + 2);
       return [
         ...current,
         { id: userId, role: "user", text: userMessage + tagSuffix },
-        { id: assistantId, role: "assistant", text: "Thinking..." },
+        { id: assistantId, role: "assistant", text: stepText },
       ];
     });
     setIsSending(true);
@@ -347,40 +359,74 @@ export default function StudentChat() {
       let renderedText = "";
       let pendingText = "";
       let streamDone = false;
+      let rawBuffer = "";
+      let lastRenderedDisplay = "";
 
       const flushTimer = setInterval(() => {
-        if (!pendingText.length) {
-          if (streamDone) clearInterval(flushTimer);
-          return;
+        if (pendingText.length > 0) {
+          const take = Math.min(4, pendingText.length);
+          renderedText += pendingText.slice(0, take);
+          pendingText = pendingText.slice(take);
         }
 
-        const take = Math.min(4, pendingText.length);
-        renderedText += pendingText.slice(0, take);
-        pendingText = pendingText.slice(take);
+        const displayText = renderedText || stepText || "Agent is thinking...";
+        if (displayText !== lastRenderedDisplay) {
+          lastRenderedDisplay = displayText;
+          setMessages((current) => {
+            const next = [...current];
+            const lastAssistantIndex = [...next]
+              .map((m, idx) => ({ m, idx }))
+              .reverse()
+              .find(({ m }) => m.role === "assistant")?.idx;
 
-        setMessages((current) => {
-          const next = [...current];
-          const lastAssistantIndex = [...next]
-            .map((m, idx) => ({ m, idx }))
-            .reverse()
-            .find(({ m }) => m.role === "assistant")?.idx;
+            if (lastAssistantIndex === undefined) return current;
+            next[lastAssistantIndex] = {
+              ...next[lastAssistantIndex],
+              text: displayText,
+            };
+            return next;
+          });
+        }
 
-          if (lastAssistantIndex === undefined) return current;
-          next[lastAssistantIndex] = {
-            ...next[lastAssistantIndex],
-            text: renderedText || "Agent is thinking...",
-          };
-          return next;
-        });
+        if (streamDone && !pendingText.length) {
+          clearInterval(flushTimer);
+        }
       }, 28);
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        pendingText += decoder.decode(value, { stream: true });
+        rawBuffer += decoder.decode(value, { stream: true });
+
+        let lines = rawBuffer.split('\n');
+        rawBuffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("__STEP__:_") || line.startsWith("__STEP__:__") || line.startsWith("__STEP__:___") || line.startsWith("__STEP__:")) {
+            const stepName = line.replace("__STEP__:", "").trim();
+            if (stepName !== "Done") {
+              stepText = stepName;
+            }
+          } else if (line.startsWith("__CHUNK__:__") || line.startsWith("__CHUNK__:___") || line.startsWith("__CHUNK__:")) {
+            pendingText += line.replace("__CHUNK__:", "");
+          } else if (line.trim().length > 0) {
+            // Fallback for non-protocol lines (e.g. errors)
+            pendingText += line + "\n";
+          }
+        }
       }
 
-      pendingText += decoder.decode();
+      rawBuffer += decoder.decode();
+      if (rawBuffer.trim()) {
+        let lines = rawBuffer.split('\n');
+        for (const line of lines) {
+          if (line.startsWith("__CHUNK__:__") || line.startsWith("__CHUNK__:___") || line.startsWith("__CHUNK__:")) {
+            pendingText += line.replace("__CHUNK__:", "");
+          } else if (line.trim().length > 0) {
+            pendingText += line + "\n";
+          }
+        }
+      }
       streamDone = true;
 
       // Wait until flush loop empties pending buffer
@@ -494,21 +540,25 @@ export default function StudentChat() {
     }
   };
 
-  if (status === "loading" || isBootstrapping || isRedirecting) {
+  if (status === "unauthenticated") {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 gap-4">
-        <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
-        <p className="text-sm font-medium text-slate-600">Loading backend data...</p>
-      </div>
+      <MainLayout role="student">
+        <div className="flex h-full min-h-[50vh] flex-col items-center justify-center bg-transparent gap-4">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+          <p className="text-sm font-medium text-slate-600">Redirecting to login...</p>
+        </div>
+      </MainLayout>
     );
   }
 
-  if (status === "unauthenticated") {
+  if (status === "loading" || isRedirecting) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 gap-4">
-        <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
-        <p className="text-sm font-medium text-slate-600">Redirecting to login...</p>
-      </div>
+      <MainLayout role="student">
+        <div className="flex h-full min-h-[50vh] flex-col items-center justify-center bg-transparent gap-4">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+          <p className="text-sm font-medium text-slate-600">Checking authorization...</p>
+        </div>
+      </MainLayout>
     );
   }
 
@@ -517,14 +567,12 @@ export default function StudentChat() {
     setDraft("");
     setMessages(initialMessages);
     setChatSessionId(createSessionId());
-    setShowSessions(false);
   };
 
   const selectSession = (sessionId: string) => {
     if (!sessionId || isSending) return;
     setDraft("");
     setChatSessionId(sessionId);
-    setShowSessions(false);
   };
 
   const togglePreferredSource = (source: string) => {
@@ -540,74 +588,104 @@ export default function StudentChat() {
   return (
     <MainLayout role="student">
 
-      <section className="grid gap-6 xl:grid-cols-[1.45fr_0.9fr] h-[calc(100vh-150px)]">
-        <div className="flex flex-col rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft h-full overflow-hidden">
-          <div className="mb-6 flex shrink-0 items-start justify-between gap-4">
-            <div>
-              <p className="text-sm uppercase tracking-[0.24em] text-brand-600">
-                Student Chat
-              </p>
-              <h1 className="mt-3 text-3xl font-semibold text-slate-950">
-                Ask your AI teaching assistant
-              </h1>
+      <section className="flex gap-6 h-[calc(100vh-150px)] min-h-0 w-full">
+
+        {/* Left Sidebar: Chat History */}
+        <aside className={`flex flex-col h-full shrink-0 transition-all duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)] overflow-hidden ${showSessions ? 'w-[240px] opacity-100 translate-x-0' : 'w-0 opacity-0 -translate-x-4'}`}>
+          <div className="flex flex-col gap-4 w-[240px] h-full">
+            <button
+              id="new-chat-btn"
+              type="button"
+              onClick={startNewConversation}
+              disabled={isSending}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 shadow-sm shrink-0"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+              New Chat
+            </button>
+
+            <div className="flex-1 overflow-y-auto rounded-[24px] border border-slate-200 bg-white p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)] flex flex-col min-h-0">
+              <p className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-slate-500 px-2 shrink-0">Recent Chats</p>
+              <div className="space-y-1 overflow-y-auto pr-1 flex-1 min-h-0">
+                {isBootstrapping ? (
+                  <div className="flex justify-center p-4">
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-brand-600" />
+                  </div>
+                ) : (
+                  <>
+                    {sessions.map((s) => (
+                      <button
+                        key={s.session_id}
+                        id={`old-chat-${s.session_id}`}
+                        type="button"
+                        onClick={() => selectSession(s.session_id)}
+                        className={`w-full rounded-[16px] px-3 py-2.5 text-left transition ${chatSessionId === s.session_id ? "bg-brand-50 text-brand-900" : "bg-transparent text-slate-600 hover:bg-slate-50"}`}
+                      >
+                        <p className="font-bold text-sm truncate">{s.last_message || "New Conversation"}</p>
+                        <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{s.last_created_at ? new Date(s.last_created_at).toLocaleDateString() : s.session_id}</p>
+                      </button>
+                    ))}
+                    {sessions.length === 0 ? <p className="text-sm font-medium text-slate-400 px-2">No old chats.</p> : null}
+                  </>
+                )}
+              </div>
             </div>
-            <div className="flex items-center gap-2">
+          </div>
+        </aside>
+
+        {/* Center: Main Chat Area */}
+        <div className="flex-1 flex flex-col rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_2px_8px_rgba(15,23,42,0.04)] h-full overflow-hidden min-h-0">
+          <div className="mb-6 flex shrink-0 items-start justify-between gap-4">
+            <div className="flex items-center gap-4">
               <button
-                id="chat-history-toggle-btn"
-                type="button"
                 onClick={() => setShowSessions((v) => !v)}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                className="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-500 transition shadow-sm bg-white"
+                title="Toggle Sidebar"
               >
-                Old chats
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h7"></path></svg>
               </button>
-              <button
-                id="new-chat-btn"
-                type="button"
-                onClick={startNewConversation}
-                disabled={isSending}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                New chat
-              </button>
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] font-bold text-brand-600">
+                  Student Chat
+                </p>
+                <h1 className="mt-1 text-2xl font-bold text-slate-900">
+                  Ask your AI assistant
+                </h1>
+              </div>
             </div>
           </div>
 
-          {showSessions ? (
-            <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Saved conversations</p>
-              <div className="max-h-44 space-y-2 overflow-y-auto">
-                {sessions.map((s) => (
-                  <button
-                    key={s.session_id}
-                    id={`old-chat-${s.session_id}`}
-                    type="button"
-                    onClick={() => selectSession(s.session_id)}
-                    className={`w-full rounded-xl border px-3 py-2 text-left text-sm transition ${chatSessionId === s.session_id ? "border-brand-300 bg-brand-50" : "border-slate-200 bg-white hover:bg-slate-100"}`}
-                  >
-                    <p className="font-medium text-slate-900">{s.last_message || "(No preview)"}</p>
-                    <p className="mt-1 text-xs text-slate-500">{s.last_created_at ? new Date(s.last_created_at).toLocaleString() : s.session_id}</p>
-                  </button>
-                ))}
-                {sessions.length === 0 ? <p className="text-sm text-slate-500">No old chats yet.</p> : null}
-              </div>
-            </div>
-          ) : null}
-
           <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-2 min-h-0">
-            {messages.map((message) => (
-              <ChatBubble
-                key={message.id}
-                role={message.role as "user" | "assistant"}
-                message={message.text}
-                citations={message.citations}
-              />
-            ))}
-            <div ref={messagesEndRef} />
+            {isBootstrapping || isLoadingHistory ? (
+              <div className="flex h-full flex-col items-center justify-center gap-4">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-brand-600" />
+                <p className="text-sm font-medium text-slate-500">Loading context...</p>
+              </div>
+            ) : (
+              <>
+                {messages.map((message) => (
+                  <ChatBubble
+                    key={message.id}
+                    role={message.role as "user" | "assistant"}
+                    message={message.text}
+                    citations={message.citations}
+                  />
+                ))}
+                <div ref={messagesEndRef} />
+              </>
+            )}
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2 shrink-0">
+            <button onClick={() => { setDraft("Explain supervised learning"); setTimeout(send, 0); }} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Explain supervised learning</button>
+            <button onClick={() => { setDraft("Quiz me on clustering"); setTimeout(send, 0); }} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Quiz me on clustering</button>
+            <button onClick={() => { setDraft("Summarize uploaded files"); setTimeout(send, 0); }} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Summarize uploaded files</button>
+            <button onClick={() => { setDraft("Generate exam questions"); setTimeout(send, 0); }} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Generate exam questions</button>
           </div>
 
           <form
             onSubmit={handleSubmit}
-            className="mt-6 shrink-0 rounded-[2rem] border border-slate-200 bg-slate-50 p-4 shadow-sm"
+            className="mt-4 shrink-0"
           >
             <div className="mb-3 flex items-center gap-2">
               <button
@@ -677,94 +755,121 @@ export default function StudentChat() {
                 )}
               </div>
             ) : null}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <label className="flex-1">
-                <span className="sr-only">Ask a question</span>
-                <textarea
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={handleKeyDown}
-                  rows={2}
-                  placeholder="Ask a question or attach a file for context..."
-                  className="min-h-[96px] w-full resize-none rounded-3xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                />
-              </label>
-              <div className="flex shrink-0 flex-col items-stretch gap-3 sm:w-64">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading}
-                  className="inline-flex items-center justify-center gap-2 rounded-3xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Paperclip className="h-4 w-4" />
-                  {isUploading ? "Uploading…" : "Attach"}
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  accept=".pdf,.txt,.md,.doc,.docx"
-                  onChange={handleFileUpload}
-                />
-                <button
-                  type="submit"
-                  disabled={isSending}
-                  className="inline-flex items-center justify-center gap-2 rounded-3xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  {isSending ? "Sending…" : "Send"}
-                  <Send className="h-4 w-4" />
-                </button>
-              </div>
+            <div className="relative flex items-center bg-[#F8FAFC] border border-slate-200 rounded-[24px] p-1.5 shadow-[0_2px_8px_rgba(15,23,42,0.04)] focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100 transition-all">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="p-3 text-slate-500 hover:text-brand-600 transition disabled:opacity-50 shrink-0"
+                title="Upload file"
+              >
+                <Paperclip className="h-5 w-5" />
+              </button>
+
+              <textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={1}
+                placeholder="Ask anything about ML..."
+                className="w-full resize-none bg-transparent px-2 py-3.5 text-sm text-slate-900 outline-none max-h-32"
+                style={{ minHeight: '52px' }}
+              />
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.txt,.md,.doc,.docx"
+                onChange={handleFileUpload}
+              />
+
+              <button
+                type="submit"
+                disabled={isSending || !draft.trim()}
+                className="p-3 bg-brand-600 text-white rounded-full mx-1 shrink-0 hover:bg-brand-700 disabled:opacity-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                title="Send"
+              >
+                <Send className="h-4 w-4" />
+              </button>
             </div>
           </form>
         </div>
 
-        <aside className="space-y-6 overflow-y-auto h-full pr-2">
+        <aside className="hidden xl:block w-[280px] shrink-0 space-y-6 overflow-y-auto h-full pr-2">
           <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm uppercase tracking-[0.24em] text-brand-600">
-                  Review roadmap
+                <p className="text-xs uppercase tracking-[0.2em] font-bold text-brand-600">
+                  Review Roadmap
                 </p>
-                <h2 className="mt-2 text-2xl font-semibold text-slate-950">
+                <h2 className="mt-1 text-xl font-bold text-slate-900">
                   Suggested topics
                 </h2>
               </div>
-              <div className="rounded-3xl bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">
-                Based on your gaps
+              <div className="rounded-xl bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-700">
+                Personalized
               </div>
             </div>
 
             <div className="mt-6 space-y-4">
-              {roadmapItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="font-semibold text-slate-900">
-                        {item.topic}
-                      </p>
-                      <p className="text-sm text-slate-600">Review priority {item.priority ? `• ${item.priority}` : ""}</p>
-                    </div>
-                    <div className="text-sm font-semibold text-brand-700">
-                      {item.progress}%
-                    </div>
-                  </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className="h-full rounded-full bg-brand-600"
-                      style={{ width: `${item.progress}%` }}
-                    />
-                  </div>
+              {isBootstrapping ? (
+                <div className="flex justify-center p-4">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-brand-600" />
                 </div>
-              ))}
-              {roadmapItems.length === 0 ? (
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                  No roadmap yet. Generate one in Roadmap page.
-                </div>
-              ) : null}
+              ) : (
+                <>
+                  {roadmapItems.map((item) => {
+                    const priorityColors = {
+                      high: "border-red-200 bg-red-50/50",
+                      medium: "border-amber-200 bg-amber-50/50",
+                      low: "border-emerald-200 bg-emerald-50/50",
+                    };
+                    const progressColors = {
+                      high: "bg-red-500",
+                      medium: "bg-amber-500",
+                      low: "bg-emerald-500",
+                    };
+                    const colorClass = item.priority ? priorityColors[item.priority] : priorityColors.low;
+                    const progressClass = item.priority ? progressColors[item.priority] : progressColors.low;
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={`rounded-[20px] border p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)] transition hover:-translate-y-0.5 ${colorClass}`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="font-bold text-slate-900">
+                              {item.topic}
+                            </p>
+                            <p className="text-xs font-medium text-slate-500 mt-1 uppercase tracking-wider">
+                              Priority: {item.priority || "Low"}
+                            </p>
+                          </div>
+                          <div className={`text-xs font-bold px-2 py-1 rounded-lg bg-white shadow-sm`}>
+                            {item.progress}%
+                          </div>
+                        </div>
+                        <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-slate-200/50">
+                          <div
+                            className={`h-full rounded-full transition-all duration-1000 ${progressClass}`}
+                            style={{ width: `${item.progress}%` }}
+                          />
+                        </div>
+                        <div className="mt-4 flex gap-2">
+                          <button className="flex-1 bg-white text-xs font-bold text-slate-700 py-2 rounded-xl shadow-sm border border-slate-100 hover:bg-slate-50 transition">Review Now</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {roadmapItems.length === 0 ? (
+                    <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                      No roadmap yet. Generate one in Roadmap page.
+                    </div>
+                  ) : null}
+                </>
+              )}
             </div>
           </div>
         </aside>

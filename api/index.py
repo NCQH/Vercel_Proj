@@ -10,6 +10,8 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from src.base_agent import run_agent
+from src.graph.builder import graph
+from langchain_core.messages import HumanMessage
 from src.rag.vectorstore import get_vectorstore, add_documents
 from src.memory.memory_service import (
     load_short_term_memory,
@@ -622,6 +624,9 @@ def update_roadmap_item(item_id: str, payload: RoadmapItemUpdateRequest):
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
     async def event_generator():
+        # Pad with 2048 spaces to force proxies (like Next.js) to flush the stream immediately
+        yield (" " * 2048) + "\n"
+        
         try:
             safe_user = _safe_user_id(request.user_id)
             profile = _get_user_profile(safe_user)
@@ -636,23 +641,72 @@ async def chat_stream(request: ChatRequest):
                 preferred_sources=preferred_sources,
             )
 
-            reply = run_agent(
-                enriched_message,
-                user_id=safe_user,
-                session_id=request.session_id,
-                allowed_sources=allowed_sources,
-                preferred_sources=preferred_sources,
+            initial_state = {
+                "messages": [HumanMessage(content=enriched_message)],
+                "user_id": safe_user,
+                "session_id": request.session_id,
+                "sources": [],
+                "allowed_sources": allowed_sources,
+                "preferred_sources": preferred_sources,
+                "memory_block": "",
+                "summary_block": "",
+                "route": "",
+                "route_reason": "",
+                "retrieved_chunks": [],
+                "final_answer": "",
+            }
+
+            final_answer = ""
+            sources = []
+
+            async for event in graph.astream_events(initial_state, version="v2", config={"recursion_limit": 25}):
+                kind = event["event"]
+                name = event["name"]
+
+                if kind == "on_chain_start":
+                    if name == "load_memory":
+                        yield '__STEP__:Loading memory context...\n'
+                    elif name == "router":
+                        yield '__STEP__:Analyzing intent...\n'
+                    elif name == "retrieval":
+                        yield '__STEP__:Searching knowledge base...\n'
+                    elif name == "tutor":
+                        yield '__STEP__:Drafting response...\n'
+                    elif name == "save_memory":
+                        yield '__STEP__:Updating context...\n'
+                
+                elif kind == "on_chain_end":
+                    output = event.get("data", {}).get("output")
+                    if isinstance(output, dict) and "messages" in output:
+                        messages = output.get("messages", [])
+                        for msg in reversed(messages):
+                            if getattr(msg, "type", "") == "ai" and not getattr(msg, "tool_calls", None):
+                                final_answer = msg.content or ""
+                                sources = output.get("sources", [])
+                                break
+
+            # Append sources if needed
+            low_confidence_markers = (
+                "Mình chưa thấy đủ thông tin đáng tin trong tài liệu",
+                "tra cứu lại chính xác hơn",
             )
-            text = reply or ""
+            is_low_confidence_reply = any(marker in final_answer for marker in low_confidence_markers)
+            if sources and "sources:" not in final_answer.lower() and not is_low_confidence_reply:
+                source_block = "\nSources:\n" + "\n".join(f"- {s}" for s in sources)
+                final_answer = final_answer.rstrip() + source_block
+
+            text = final_answer or ""
 
             _save_chat_message(safe_user, request.session_id, "user", request.message)
             _save_chat_message(safe_user, request.session_id, "assistant", text)
+
+            yield '__STEP__:Done\n'
 
             # Chunk by words for smoother progressive rendering on the client.
             words = text.split(" ")
             for i, word in enumerate(words):
                 chunk = (word + " ") if i < len(words) - 1 else word
-                yield chunk
+                yield f"__CHUNK__:{chunk}\n"
                 await asyncio.sleep(0.015)
         except Exception as e:
             logger.exception("Chat stream error")

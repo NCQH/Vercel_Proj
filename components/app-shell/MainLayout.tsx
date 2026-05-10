@@ -127,19 +127,19 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
   }, [role, status, identity, pathname]);
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="relative flex min-h-screen overflow-hidden">
-        <aside className="hidden w-72 shrink-0 flex-col border-r border-slate-200 bg-white px-6 py-8 lg:flex">
-          <div className="mb-10 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-3xl bg-brand-600 text-white shadow-soft">
-              <Home className="h-6 w-6" />
+    <div className="h-screen bg-slate-50 overflow-hidden">
+      <div className="relative flex h-full overflow-hidden">
+        <aside className="hidden w-[220px] shrink-0 flex-col border-r border-slate-200 bg-[#F8FAFC] px-4 py-8 lg:flex">
+          <div className="mb-10 flex items-center gap-3 px-2">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+              <span className="text-lg">✨</span>
             </div>
             <div>
-              <p className="text-sm uppercase tracking-[0.24em] text-brand-600">
-                AI Teaching Assistant
+              <p className="text-[10px] font-bold uppercase tracking-wider text-brand-600">
+                AI Assistant
               </p>
-              <h2 className="text-lg font-semibold text-slate-900">
-                {roleLabel[role]} Console
+              <h2 className="text-sm font-bold text-slate-900 leading-tight mt-0.5">
+                {role === "student" ? "Personalized Learning" : `${roleLabel[role]} Console`}
               </h2>
             </div>
           </div>
@@ -153,16 +153,16 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`group flex items-center gap-3 rounded-3xl px-4 py-3 text-sm font-medium transition ${active
-                    ? "bg-brand-50 text-brand-700"
-                    : "text-slate-700 hover:bg-slate-100"
+                  className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200 ${active
+                    ? "bg-[#EEF2FF] text-[#4F46E5] border-l-[3px] border-[#4F46E5]"
+                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 border-l-[3px] border-transparent"
                     }`}
                 >
-                  <Icon className="h-5 w-5" />
+                  <Icon className={`h-5 w-5 ${active ? "fill-[#EEF2FF]" : ""}`} />
                   <span className="relative inline-flex items-center gap-2">
                     {item.label}
                     {role === "student" && item.href === "/student/materials" && hasNewMaterials ? (
-                      <span className="inline-block h-2.5 w-2.5 rounded-full bg-rose-500" />
+                      <span className="inline-block h-2 w-2 rounded-full bg-rose-500" />
                     ) : null}
                   </span>
                 </Link>
@@ -170,13 +170,30 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
             })}
           </nav>
 
-          <div className="mt-auto rounded-3xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
-            <p className="font-semibold text-slate-900">Need help?</p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Use the chat for quick subject guidance or check roadmap topics
-              for your next review session.
-            </p>
-          </div>
+          {role === "student" ? (
+            <div className="mt-auto rounded-2xl bg-white p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)] border border-slate-100 mx-1">
+              <p className="text-sm font-bold flex items-center gap-2 text-slate-800">
+                🔥 Weekly Progress
+              </p>
+              <div className="mt-3 space-y-1.5 text-xs font-medium text-slate-500">
+                <div className="flex justify-between items-center">
+                  <span>Studied</span>
+                  <span className="text-slate-900 font-bold">8h this week</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span>Topics</span>
+                  <span className="text-slate-900 font-bold">3 completed</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-auto rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-[0_2px_8px_rgba(15,23,42,0.04)] mx-1">
+              <p className="font-bold text-slate-900">Need help?</p>
+              <p className="mt-1.5 text-xs leading-5 text-slate-600">
+                Check roadmap topics for your next review session.
+              </p>
+            </div>
+          )}
         </aside>
 
         <div className="flex flex-1 flex-col">
@@ -191,17 +208,44 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
                   <Menu className="h-5 w-5" />
                 </button>
                 <div>
-                  <p className="text-sm font-medium text-slate-500">
-                    {roleLabel[role]} experience
-                  </p>
-                  <p className="text-2xl font-semibold text-slate-900">
-                    Focused learning flow
-                  </p>
+                  {role === "student" ? (
+                    <>
+                      <p className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                        Good evening, {profileFullName?.split(' ')[0] || session?.user?.name?.split(' ')[0] || 'Student'} 👋
+                      </p>
+                      <p className="text-sm font-medium text-slate-500 mt-0.5">
+                        Continue your ML journey
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-medium text-slate-500">
+                        {roleLabel[role]} experience
+                      </p>
+                      <p className="text-xl font-bold text-slate-900">
+                        Focused learning flow
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
 
+              {role === "student" && (
+                <div className="hidden md:flex items-center gap-3 ml-auto mr-6 text-sm font-bold">
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-orange-50 text-orange-600 border border-orange-100">
+                    🔥 <span className="font-semibold">5-day streak</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
+                    📘 <span className="font-semibold">12 lessons</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
+                    ⏱ <span className="font-semibold">8h this week</span>
+                  </div>
+                </div>
+              )}
+
               {/* Account button - same style as original StudentChat button */}
-              <div className="relative ml-auto mr-5" ref={accountMenuRef}>
+              <div className={`relative ${role !== "student" ? "ml-auto" : ""} mr-2`} ref={accountMenuRef}>
                 <button
                   id="account-menu-toggle"
                   type="button"
@@ -278,18 +322,18 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
         ) : null}
 
         <aside
-          className={`fixed inset-y-0 left-0 z-40 w-72 overflow-y-auto border-r border-slate-200 bg-white px-6 py-8 transition-all duration-300 lg:hidden ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+          className={`fixed inset-y-0 left-0 z-40 w-[220px] overflow-y-auto border-r border-slate-200 bg-[#F8FAFC] px-4 py-8 transition-all duration-300 lg:hidden ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
         >
-          <div className="mb-10 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-3xl bg-brand-600 text-white shadow-soft">
-              <Home className="h-6 w-6" />
+          <div className="mb-10 flex items-center gap-3 px-2">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+              <span className="text-lg">✨</span>
             </div>
             <div>
-              <p className="text-sm uppercase tracking-[0.24em] text-brand-600">
-                AI Teaching Assistant
+              <p className="text-[10px] font-bold uppercase tracking-wider text-brand-600">
+                AI Assistant
               </p>
-              <h2 className="text-lg font-semibold text-slate-900">
-                {roleLabel[role]} Console
+              <h2 className="text-sm font-bold text-slate-900 leading-tight mt-0.5">
+                {role === "student" ? "Personalized Learning" : `${roleLabel[role]} Console`}
               </h2>
             </div>
           </div>
@@ -302,16 +346,17 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`group flex items-center gap-3 rounded-3xl px-4 py-3 text-sm font-medium transition ${active
-                    ? "bg-brand-50 text-brand-700"
-                    : "text-slate-700 hover:bg-slate-100"
+                  onClick={() => setSidebarOpen(false)}
+                  className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200 ${active
+                    ? "bg-[#EEF2FF] text-[#4F46E5] border-l-[3px] border-[#4F46E5]"
+                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 border-l-[3px] border-transparent"
                     }`}
                 >
-                  <Icon className="h-5 w-5" />
+                  <Icon className={`h-5 w-5 ${active ? "fill-[#EEF2FF]" : ""}`} />
                   <span className="relative inline-flex items-center gap-2">
                     {item.label}
                     {role === "student" && item.href === "/student/materials" && hasNewMaterials ? (
-                      <span className="inline-block h-2.5 w-2.5 rounded-full bg-rose-500" />
+                      <span className="inline-block h-2 w-2 rounded-full bg-rose-500" />
                     ) : null}
                   </span>
                 </Link>

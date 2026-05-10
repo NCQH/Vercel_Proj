@@ -1,4 +1,4 @@
-import { MessageCircle, FileText } from "lucide-react";
+import { MessageCircle, FileText, User } from "lucide-react";
 
 interface ChatBubbleProps {
   role: "user" | "assistant";
@@ -15,21 +15,30 @@ export default function ChatBubble({
 
   return (
     <div
-      className={`group relative rounded-3xl p-5 shadow-soft ${isAssistant ? "bg-slate-950 text-white" : "bg-white text-slate-900"} ${isAssistant ? "self-start" : "self-end"} max-w-[90%] sm:max-w-xl`}
+      className={`group relative rounded-[24px] p-5 shadow-[0_2px_8px_rgba(15,23,42,0.04)] ${isAssistant ? "bg-[#0F172A] text-white" : "bg-[#EEF2FF] text-[#1E1B4B]"} ${isAssistant ? "self-start" : "self-end"} w-full sm:max-w-[85%]`}
     >
-      <div className="flex items-center gap-3 text-sm font-medium opacity-80">
-        <span>{isAssistant ? "AI Assistant" : "You"}</span>
+      <div className={`flex items-center gap-3 text-xs font-bold uppercase tracking-wider ${isAssistant ? "text-slate-400" : "text-indigo-400"}`}>
         {isAssistant ? (
-          <MessageCircle className="h-4 w-4" />
+          <div className="flex items-center gap-2">
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-600 text-white shadow-sm">
+               ✨
+            </div>
+            AI Assistant
+          </div>
         ) : (
-          <FileText className="h-4 w-4" />
+          <div className="flex items-center gap-2">
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-200 text-indigo-700 shadow-sm">
+               <User className="h-3.5 w-3.5" />
+            </div>
+            You
+          </div>
         )}
       </div>
-      <p
-        className={`mt-4 text-sm leading-7 ${isAssistant ? "text-slate-100" : "text-slate-800"}`}
+      <div
+        className={`mt-3 text-[15px] leading-relaxed whitespace-pre-wrap ${isAssistant ? "text-slate-200" : "text-slate-800"}`}
       >
         {message}
-      </p>
+      </div>
       {citations.length > 0 ? (
         <div className="mt-4 flex flex-wrap gap-2">
           {citations.map((citation) => (
