@@ -4,10 +4,11 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+import tempfile
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 from src.base_agent import run_agent
 from src.graph.builder import graph
@@ -28,6 +29,7 @@ import logging
 import asyncio
 import httpx
 import json
+from src.storage import SupabaseStorageClient
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -38,6 +40,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
 
 app = FastAPI()
+
+# Initialize Supabase Storage client
+storage_client = SupabaseStorageClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY else None
+
+# Storage bucket names
+USER_UPLOADS_BUCKET = "user-uploads"
+CLASS_FILES_BUCKET = "class-files"
 
 class RoadmapRefreshRequest(BaseModel):
     user_id: str
@@ -293,6 +302,13 @@ def _get_allowed_sources_and_collections(user_id: str) -> tuple[list[str], list[
     return sorted(allowed), sorted(collections)
 
 
+def _get_allowed_sources(user_id: str) -> list[str]:
+    """Get list of allowed source filenames for a user (without collections)."""
+    allowed_sources, _ = _get_allowed_sources_and_collections(user_id)
+    return allowed_sources
+
+
+
 @app.post("/api/chat")
 def chat(request: ChatRequest):
     try:
@@ -312,7 +328,7 @@ def chat(request: ChatRequest):
             preferred_sources=preferred_sources,
         )
 
-        response = run_agent(
+        response, state = run_agent(
             enriched_message,
             user_id=safe_user,
             session_id=request.session_id,
@@ -321,7 +337,6 @@ def chat(request: ChatRequest):
             preferred_sources=preferred_sources,
         )
 
-        state = get_last_state() or {}
         sources = state.get("sources", []) if isinstance(state, dict) else []
         if not isinstance(sources, list):
             sources = []
@@ -816,7 +831,7 @@ def _save_upload_metadata(
     user_id: str,
     file_id: str,
     original_filename: str,
-    stored_path: str,
+    storage_path: str,
     size_bytes: int,
 ) -> None:
     headers = _supabase_headers()
@@ -825,7 +840,7 @@ def _save_upload_metadata(
         "file_id": file_id,
         "user_id": user_id,
         "original_filename": original_filename,
-        "stored_path": stored_path,
+        "stored_path": storage_path,  # Now stores Supabase Storage path
         "size_bytes": size_bytes,
     }
 
@@ -1321,32 +1336,54 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
         raise HTTPException(status_code=401, detail="Missing user_id")
     if not class_id:
         raise HTTPException(status_code=400, detail="Missing class_id")
+    
+    if not storage_client:
+        raise HTTPException(status_code=500, detail="Storage client not initialized")
 
     safe_user = _safe_user_id(user_id)
     _ensure_lecturer_class_owner(safe_user, class_id)
 
     safe_name = _safe_filename(file.filename or "upload.bin")
     file_id = str(uuid.uuid4())
-    class_dir = Path("data/uploads/classes") / class_id
-    class_dir.mkdir(parents=True, exist_ok=True)
 
-    target_path = class_dir / f"{file_id}_{safe_name}"
     content = await file.read()
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 20MB)")
 
-    target_path.write_bytes(content)
+    # Upload to Supabase Storage
+    storage_path = f"{class_id}/{file_id}_{safe_name}"
+    try:
+        storage_client.upload_file(
+            bucket=CLASS_FILES_BUCKET,
+            path=storage_path,
+            file_data=content,
+        )
+    except Exception as e:
+        logger.exception("Failed to upload class file to Supabase Storage")
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
     try:
-        ext = target_path.suffix.lower()
-        if ext == ".pdf":
-            docs = PyMuPDFLoader(str(target_path)).load()
-        elif ext == ".docx":
-            docs = Docx2txtLoader(str(target_path)).load()
-        elif ext in {".txt", ".md"}:
-            docs = TextLoader(str(target_path), encoding="utf-8").load()
-        else:
-            docs = []
+        ext = Path(safe_name).suffix.lower()
+        docs = []
+        
+        # Create temporary file for document loaders
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+        
+        try:
+            if ext == ".pdf":
+                docs = PyMuPDFLoader(tmp_path).load()
+            elif ext == ".docx":
+                docs = Docx2txtLoader(tmp_path).load()
+            elif ext in {".txt", ".md"}:
+                docs = TextLoader(tmp_path, encoding="utf-8").load()
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
         if docs:
             splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
@@ -1356,7 +1393,7 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
                     **(chunk.metadata or {}),
                     "class_id": class_id,
                     "source": safe_name,
-                    "stored_path": str(target_path),
+                    "stored_path": storage_path,
                 }
             vectorstore = get_vectorstore(user_id=f"class_{class_id}")
             add_documents(vectorstore, chunks)
@@ -1369,7 +1406,7 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
         "class_id": class_id,
         "uploader_id": safe_user,
         "original_filename": safe_name,
-        "stored_path": str(target_path),
+        "stored_path": storage_path,
         "size_bytes": len(content),
     }
     headers = _supabase_headers()
@@ -1389,6 +1426,9 @@ def download_class_file(file_id: str = "", user_id: str = ""):
         raise HTTPException(status_code=401, detail="Missing user_id")
     if not file_id:
         raise HTTPException(status_code=400, detail="Missing file_id")
+    
+    if not storage_client:
+        raise HTTPException(status_code=500, detail="Storage client not initialized")
 
     safe_user = _safe_user_id(user_id)
     headers = _supabase_headers()
@@ -1417,16 +1457,26 @@ def download_class_file(file_id: str = "", user_id: str = ""):
     if not can_access:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    stored_path = Path(str(item.get("stored_path") or "")).resolve()
-    if not stored_path.exists() or not stored_path.is_file():
-        raise HTTPException(status_code=404, detail="Stored file missing")
+    storage_path = str(item.get("stored_path") or "")
+    if not storage_path:
+        raise HTTPException(status_code=404, detail="Storage path not found")
 
-    from fastapi.responses import FileResponse
+    # Download from Supabase Storage
+    try:
+        file_content = storage_client.download_file(
+            bucket=CLASS_FILES_BUCKET,
+            path=storage_path,
+        )
+    except Exception as e:
+        logger.exception("Failed to download class file from Supabase Storage")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
 
-    return FileResponse(
-        path=str(stored_path),
-        filename=str(item.get("original_filename") or stored_path.name),
+    return Response(
+        content=file_content,
         media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{item.get("original_filename") or "download.bin"}"'
+        },
     )
 
 
@@ -1434,41 +1484,62 @@ def download_class_file(file_id: str = "", user_id: str = ""):
 async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
     if not user_id:
         raise HTTPException(status_code=401, detail="Missing user_id")
+    
+    if not storage_client:
+        raise HTTPException(status_code=500, detail="Storage client not initialized")
 
     safe_user = _safe_user_id(user_id)
     safe_name = _safe_filename(file.filename or "upload.bin")
     file_id = str(uuid.uuid4())
 
-    user_dir = Path("data/uploads") / safe_user
-    user_dir.mkdir(parents=True, exist_ok=True)
-
-    target_path = user_dir / f"{file_id}_{safe_name}"
     content = await file.read()
 
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 20MB)")
 
-    target_path.write_bytes(content)
+    # Upload to Supabase Storage
+    storage_path = f"{safe_user}/{file_id}_{safe_name}"
+    try:
+        storage_client.upload_file(
+            bucket=USER_UPLOADS_BUCKET,
+            path=storage_path,
+            file_data=content,
+        )
+    except Exception as e:
+        logger.exception("Failed to upload file to Supabase Storage")
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
     _save_upload_metadata(
         user_id=safe_user,
         file_id=file_id,
         original_filename=safe_name,
-        stored_path=str(target_path),
+        storage_path=storage_path,
         size_bytes=len(content),
     )
 
     # Ingest uploaded file into user-scoped RAG collection
     try:
-        ext = target_path.suffix.lower()
-        if ext == ".pdf":
-            docs = PyMuPDFLoader(str(target_path)).load()
-        elif ext == ".docx":
-            docs = Docx2txtLoader(str(target_path)).load()
-        elif ext in {".txt", ".md"}:
-            docs = TextLoader(str(target_path), encoding="utf-8").load()
-        else:
-            docs = []
+        ext = Path(safe_name).suffix.lower()
+        docs = []
+        
+        # Create temporary file for document loaders
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+        
+        try:
+            if ext == ".pdf":
+                docs = PyMuPDFLoader(tmp_path).load()
+            elif ext == ".docx":
+                docs = Docx2txtLoader(tmp_path).load()
+            elif ext in {".txt", ".md"}:
+                docs = TextLoader(tmp_path, encoding="utf-8").load()
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
         if docs:
             splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
@@ -1478,7 +1549,7 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
                     **(chunk.metadata or {}),
                     "user_id": safe_user,
                     "source": safe_name,
-                    "stored_path": str(target_path),
+                    "stored_path": storage_path,
                 }
 
             vectorstore = get_vectorstore(user_id=safe_user)
@@ -1493,7 +1564,7 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
         "user_id": safe_user,
         "filename": safe_name,
         "size": len(content),
-        "path": str(target_path),
+        "path": storage_path,
     }
 
 
@@ -1503,6 +1574,9 @@ def download_upload(file_id: str = "", user_id: str = ""):
         raise HTTPException(status_code=401, detail="Missing user_id")
     if not file_id:
         raise HTTPException(status_code=400, detail="Missing file_id")
+    
+    if not storage_client:
+        raise HTTPException(status_code=500, detail="Storage client not initialized")
 
     safe_user = _safe_user_id(user_id)
     items = _list_upload_metadata(safe_user)
@@ -1510,22 +1584,26 @@ def download_upload(file_id: str = "", user_id: str = ""):
     if not target:
         raise HTTPException(status_code=404, detail="File not found")
 
-    stored_path = Path(str(target.get("path") or "")).resolve()
-    if not stored_path.exists() or not stored_path.is_file():
-        raise HTTPException(status_code=404, detail="Stored file missing")
+    storage_path = str(target.get("path") or "")
+    if not storage_path:
+        raise HTTPException(status_code=404, detail="Storage path not found")
 
-    user_root = (Path("data/uploads") / safe_user).resolve()
+    # Download from Supabase Storage
     try:
-        stored_path.relative_to(user_root)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Access denied")
+        file_content = storage_client.download_file(
+            bucket=USER_UPLOADS_BUCKET,
+            path=storage_path,
+        )
+    except Exception as e:
+        logger.exception("Failed to download file from Supabase Storage")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
 
-    from fastapi.responses import FileResponse
-
-    return FileResponse(
-        path=str(stored_path),
-        filename=str(target.get("filename") or stored_path.name),
+    return Response(
+        content=file_content,
         media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{target.get("filename") or "download.bin"}"'
+        },
     )
 
 
@@ -1550,7 +1628,7 @@ def _delete_upload_metadata_and_file(user_id: str, file_id: str) -> dict:
 
     row = rows[0]
     original_filename = str(row.get("original_filename") or "")
-    stored_path_raw = str(row.get("stored_path") or "")
+    storage_path = str(row.get("stored_path") or "")
 
     # 1) Delete metadata row
     delete_url = (
@@ -1563,16 +1641,17 @@ def _delete_upload_metadata_and_file(user_id: str, file_id: str) -> dict:
     if delete_resp.status_code >= 300:
         raise HTTPException(status_code=500, detail=f"Failed to delete upload metadata: {delete_resp.text}")
 
-    # 2) Delete physical file (best effort)
+    # 2) Delete file from Supabase Storage (best effort)
     file_deleted = False
-    if stored_path_raw:
+    if storage_path and storage_client:
         try:
-            p = Path(stored_path_raw).resolve()
-            if p.exists() and p.is_file():
-                p.unlink()
-                file_deleted = True
+            storage_client.delete_file(
+                bucket=USER_UPLOADS_BUCKET,
+                path=storage_path,
+            )
+            file_deleted = True
         except Exception:
-            logger.warning("Failed to remove stored upload file path=%s", stored_path_raw, exc_info=True)
+            logger.warning("Failed to remove file from Supabase Storage path=%s", storage_path, exc_info=True)
 
     # 3) Purge chunks from user's vectorstore by source filename (best effort)
     vector_deleted = False
@@ -1594,7 +1673,7 @@ def _delete_upload_metadata_and_file(user_id: str, file_id: str) -> dict:
     return {
         "file_id": file_id,
         "filename": original_filename,
-        "stored_path": stored_path_raw,
+        "stored_path": storage_path,
         "file_deleted": file_deleted,
         "vector_deleted": vector_deleted,
     }

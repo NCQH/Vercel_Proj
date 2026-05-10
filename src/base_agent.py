@@ -31,9 +31,9 @@ def run_agent(
     allowed_sources: list[str] | None = None,
     allowed_collections: list[str] | None = None,
     preferred_sources: list[str] | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """
-    Run the LangGraph agent and return the final answer string.
+    Run the LangGraph agent and return the final answer string and state.
 
     Args:
         user_input:  The user's question.
@@ -41,7 +41,7 @@ def run_agent(
         session_id:  Groups turns within a session.
 
     Returns:
-        The assistant's final response (with sources appended if any).
+        Tuple of (final_answer, state) where state contains sources and other metadata.
     """
 
     initial_state = {
@@ -70,7 +70,7 @@ def run_agent(
             final_answer = msg.content or ""
             break
 
-    return final_answer
+    return final_answer, result
 
 
 # ------------------------------------------------------------------
@@ -118,7 +118,7 @@ def main():
             continue
 
         try:
-            response = run_agent(
+            response, state = run_agent(
                 user_input,
                 user_id=user_id,
                 session_id=session_id,
