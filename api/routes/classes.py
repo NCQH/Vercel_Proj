@@ -303,6 +303,17 @@ def approve_request(membership_id: str, user_id: str = Form(""), approve: str = 
     safe_user = _safe_user_id(user_id)
     is_approve = approve.lower() == "true"
     item = _approve_membership(safe_user, membership_id, is_approve)
+    
+    # Invalidate cache for student so they can access class files immediately
+    if is_approve and item.get("student_id"):
+        try:
+            from api.lib.cache_manager import CacheManager
+            student_id = item.get("student_id")
+            CacheManager.invalidate_allowed_sources(student_id)
+            logger.info(f"Invalidated cache for student {student_id} after approval")
+        except Exception as e:
+            logger.warning(f"Failed to invalidate cache: {e}")
+    
     return {"ok": True, "item": item}
 
 @router.post("/join")
@@ -426,6 +437,18 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
     storage_client.upload_file(bucket=CLASS_FILES_BUCKET, path=storage_path, file_data=content)
     
     item = _save_class_file_metadata(safe_user, class_id, file_id, file.filename, storage_path, len(content))
+    
+    # Invalidate cache for all approved class members
+    try:
+        from api.lib.cache_manager import CacheManager
+        members = _list_all_members_for_class(safe_user, class_id)
+        approved_members = [m.get("student_id") for m in members if m.get("status") == "approved"]
+        if approved_members:
+            count = CacheManager.invalidate_class_members(class_id, approved_members)
+            logger.info(f"Invalidated cache for {count} class members after file upload")
+    except Exception as e:
+        logger.warning(f"Failed to invalidate cache for class members: {e}")
+    
     return {"ok": True, "item": item}
 
 @router.get("/public")

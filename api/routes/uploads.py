@@ -154,6 +154,14 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
         logger.exception("RAG ingest failed")
         raise HTTPException(status_code=500, detail=f"Upload saved but RAG ingest failed: {str(e)}")
 
+    # Invalidate cache so user sees new file immediately
+    try:
+        from api.lib.cache_manager import CacheManager
+        CacheManager.invalidate_allowed_sources(safe_user)
+        logger.info(f"Invalidated cache for user {safe_user} after upload")
+    except Exception as e:
+        logger.warning(f"Failed to invalidate cache: {e}")
+
     return {"ok": True, "file_id": file_id, "user_id": safe_user, "filename": safe_name, "size": len(content), "path": storage_path}
 
 @router.get("/download")
@@ -185,4 +193,13 @@ def delete_upload(file_id: str, user_id: str = ""):
         raise HTTPException(status_code=400, detail="Missing user_id or file_id")
     safe_user = _safe_user_id(user_id)
     result = _delete_upload_metadata_and_file(safe_user, file_id)
+    
+    # Invalidate cache so user sees file removed immediately
+    try:
+        from api.lib.cache_manager import CacheManager
+        CacheManager.invalidate_allowed_sources(safe_user)
+        logger.info(f"Invalidated cache for user {safe_user} after delete")
+    except Exception as e:
+        logger.warning(f"Failed to invalidate cache: {e}")
+    
     return {"ok": True, "user_id": safe_user, "deleted": result}

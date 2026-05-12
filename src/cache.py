@@ -74,3 +74,51 @@ class TTLCache:
             val = loader()
             self.set(key, val, ttl)
             return val
+
+    def invalidate(self, key: str) -> bool:
+        """
+        Invalidate a specific cache key.
+        
+        Args:
+            key: The cache key to invalidate
+            
+        Returns:
+            True if key was found and removed, False otherwise
+        """
+        with self._lock:
+            if key in self._store:
+                self._store.pop(key)
+                return True
+            return False
+
+    def invalidate_pattern(self, pattern: str) -> int:
+        """
+        Invalidate all keys matching a pattern (using fnmatch).
+        
+        Args:
+            pattern: Pattern to match (e.g., "user:*", "allowed:*")
+            
+        Returns:
+            Number of keys invalidated
+        """
+        import fnmatch
+        with self._lock:
+            keys_to_delete = [
+                k for k in self._store.keys() 
+                if fnmatch.fnmatch(k, pattern)
+            ]
+            for key in keys_to_delete:
+                self._store.pop(key)
+            return len(keys_to_delete)
+
+    def invalidate_all(self) -> int:
+        """
+        Invalidate all cached items.
+        
+        Returns:
+            Number of items invalidated
+        """
+        with self._lock:
+            count = len(self._store)
+            self._store.clear()
+            return count
