@@ -32,9 +32,40 @@ _INJECTION_PATTERNS = (
     "jailbreak",
     "bypass policy",
 )
+_GUARDRAIL_PREFIX_KEYS = {"safe", "reason", "category", "route", "is_academic"}
+
+
+def _strip_guardrail_metadata_prefix(raw: str) -> str:
+    text = (raw or "").lstrip()
+    if not text.startswith("{"):
+        return raw or ""
+
+    try:
+        parsed, idx = json.JSONDecoder().raw_decode(text)
+    except Exception:
+        return raw or ""
+
+    if not isinstance(parsed, dict):
+        return raw or ""
+
+    if not _GUARDRAIL_PREFIX_KEYS.issubset(parsed.keys()):
+        return raw or ""
+
+    if not isinstance(parsed.get("safe"), bool):
+        return raw or ""
+
+    route = str(parsed.get("route", "")).strip().lower()
+    if route not in {"retrieval", "direct"}:
+        return raw or ""
+
+    remainder = text[idx:].lstrip(" \t\r\n:-")
+    logger.warning("[CHAT] stripped leaked guardrail metadata prefix route=%s", route)
+    return remainder
+
 
 def _sanitize_chat_message(raw: str) -> str:
-    text = (raw or "").replace("\x00", " ")
+    text = _strip_guardrail_metadata_prefix(raw)
+    text = text.replace("\x00", " ")
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     for pat in _INJECTION_PATTERNS:

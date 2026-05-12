@@ -86,20 +86,9 @@ def save_memory_node(state: AgentState) -> dict:
     )
     logger.info("[SUMMARY SAVE] length %d", len(summary))
 
-    # Collect sources from tool messages
+    # Preserve citation sources produced by tutor/retrieval nodes.
+    # Do not mutate here, because save_memory is terminal and source rewriting
+    # can degrade citation quality (e.g. replacing [n] filename format).
     sources = list(state.get("sources", []))
-    import json
-    for msg in state["messages"]:
-        if msg.type == "tool":
-            try:
-                data = json.loads(msg.content)
-                if isinstance(data, list):
-                    for item in data:
-                        if isinstance(item, dict):
-                            src = item.get("source")
-                            if src and str(src) not in sources:
-                                sources.append(str(src))
-            except (json.JSONDecodeError, TypeError):
-                pass
 
     return {"sources": sources}
