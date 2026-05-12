@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
+import { apiClient } from "../../../lib/api-client";
 import MainLayout from "../../../components/app-shell/MainLayout";
 
 type ClassItem = { id: string; name: string; code: string; description?: string };
@@ -22,25 +23,34 @@ export default function LecturerMaterialsPage() {
 
   const loadClasses = async () => {
     if (!identity) return;
-    const res = await fetch(`/api/classes?user_id=${encodeURIComponent(identity)}&role=lecturer`, { cache: "no-store" });
-    const data = await res.json();
-    const items = data.items || [];
-    setClasses(items);
-    if (!selectedClassId && items[0]?.id) setSelectedClassId(items[0].id);
+    try {
+      const data = await apiClient.classes.list(identity, "lecturer");
+      const items = data.items || [];
+      setClasses(items);
+      if (!selectedClassId && items[0]?.id) setSelectedClassId(items[0].id);
+    } catch (err) {
+      console.error("Failed to load classes", err);
+    }
   };
 
   const loadPending = async (classId: string) => {
     if (!identity) return;
-    const res = await fetch(`/api/classes/pending?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(classId)}`, { cache: "no-store" });
-    const data = await res.json();
-    setPending(data.items || []);
+    try {
+      const data = await apiClient.classes.listPendingRequests(identity, classId);
+      setPending(data.items || []);
+    } catch (err) {
+      console.error("Failed to load pending requests", err);
+    }
   };
 
   const loadFiles = async (classId: string) => {
     if (!identity) return;
-    const res = await fetch(`/api/class-files?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(classId)}`, { cache: "no-store" });
-    const data = await res.json();
-    setClassFiles(data.items || []);
+    try {
+      const data = await apiClient.classes.listFiles(identity, classId);
+      setClassFiles(data.items || []);
+    } catch (err) {
+      console.error("Failed to load files", err);
+    }
   };
 
   useEffect(() => { loadClasses(); }, [identity]);
@@ -51,22 +61,23 @@ export default function LecturerMaterialsPage() {
   }, [selectedClassId]);
 
   const createClass = async () => {
-    const fd = new FormData();
-    fd.append("user_id", identity);
-    fd.append("name", name);
-    fd.append("description", description);
-    await fetch("/api/classes", { method: "POST", body: fd });
-    setName("");
-    setDescription("");
-    await loadClasses();
+    try {
+      await apiClient.classes.create(identity, name, description);
+      setName("");
+      setDescription("");
+      await loadClasses();
+    } catch (err) {
+      console.error("Failed to create class", err);
+    }
   };
 
   const approve = async (id: string, ok: boolean) => {
-    const fd = new FormData();
-    fd.append("user_id", identity);
-    fd.append("approve", String(ok));
-    await fetch(`/api/classes/members/${id}/approve`, { method: "POST", body: fd });
-    await loadPending(selectedClassId);
+    try {
+      await apiClient.classes.approveRequest(identity, id, ok);
+      await loadPending(selectedClassId);
+    } catch (err) {
+      console.error("Failed to approve/reject", err);
+    }
   };
 
   const uploadClassFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -76,8 +87,12 @@ export default function LecturerMaterialsPage() {
     fd.append("file", file);
     fd.append("user_id", identity);
     fd.append("class_id", selectedClassId);
-    await fetch("/api/class-files/upload", { method: "POST", body: fd });
-    await loadFiles(selectedClassId);
+    try {
+      await fetch("/api/class-files/upload", { method: "POST", body: fd });
+      await loadFiles(selectedClassId);
+    } catch (err) {
+      console.error("Upload failed", err);
+    }
     e.target.value = "";
   };
 

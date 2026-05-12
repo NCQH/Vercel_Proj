@@ -32,43 +32,24 @@ def retrieval_node(state: AgentState) -> dict:
             break
 
     allowed_collections = state.get("allowed_collections") or [state.get("user_id", "default")]
+    allowed_sources = state.get("allowed_sources") or []
+    preferred_sources = state.get("preferred_sources") or []
 
     result = run_retrieval(
         question,
         mode="hybrid",
         top_k=5,
         collections=allowed_collections,
+        allowed_sources=allowed_sources,
     )
-
-    allowed_sources = set(state.get("allowed_sources") or [])
-    preferred_sources = set(state.get("preferred_sources") or [])
 
     chunks = result.get("chunks", [])
     logger.info(
-        "[RETRIEVAL] raw chunks=%d allowed_collections=%s allowed_sources=%d preferred_sources=%d",
+        "[RETRIEVAL] DB-filtered chunks=%d allowed_collections=%s allowed_sources=%d preferred_sources=%d",
         len(chunks),
         allowed_collections,
         len(allowed_sources),
         len(preferred_sources),
-    )
-
-    if chunks:
-        top_raw = sorted(chunks, key=_score_of, reverse=True)[:5]
-        logger.info(
-            "[RETRIEVAL] raw top=%s",
-            [f"{_src_of(c)}:{_score_of(c):.4f}" for c in top_raw],
-        )
-
-    before_source_filter = len(chunks)
-    if allowed_sources:
-        chunks = [
-            c for c in chunks
-            if _src_of(c) in allowed_sources
-        ]
-    logger.info(
-        "[RETRIEVAL] after source filter chunks=%d removed=%d",
-        len(chunks),
-        before_source_filter - len(chunks),
     )
 
     if preferred_sources:

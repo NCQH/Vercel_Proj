@@ -20,25 +20,16 @@ def _distance_to_relevance(raw_score: float) -> float:
 
 load_dotenv()  # Load environment variables from .env file
 
-def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "default") -> List[Dict[str, Any]]:
+def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "default", where_filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
-    Dense retrieval: tìm kiếm theo embedding similarity trong ChromaDB.
-
-    Args:
-        query: Câu hỏi của người dùng
-        top_k: Số chunk tối đa trả về
-
-    Returns:
-        List các dict, mỗi dict là một chunk với:
-          - "text": nội dung chunk
-          - "metadata": metadata (source, section, effective_date, ...)
-          - "score": cosine similarity score
+    Dense retrieval with optional metadata filtering.
     """
 
     vectorstore = get_vectorstore(user_id=user_id)
     results = vectorstore.similarity_search_with_score(
         query,
-        k=top_k
+        k=top_k,
+        filter=where_filter
     )
 
     chunks = []
@@ -85,13 +76,13 @@ def build_bm25_index(docs: List[Dict[str, Any]]):
     BM25_INDEX = BM25Okapi(tokenized_corpus)
 
 
-def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "default") -> List[Dict[str, Any]]:
+def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "default", where_filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
-    BM25 sparse retrieval (keyword-based search) scoped to a single user collection.
+    BM25 sparse retrieval with optional metadata filtering.
     """
 
     vectorstore = get_vectorstore(user_id=user_id)
-    raw = vectorstore.get(include=["documents", "metadatas"])
+    raw = vectorstore.get(where=where_filter, include=["documents", "metadatas"])
     docs = raw.get("documents") or []
     metas = raw.get("metadatas") or []
 
@@ -149,14 +140,15 @@ def build_doc_key(chunk: Dict[str, Any]) -> str:
 def retrieve_hybrid(
     query: str,
     top_k: int = TOP_K_SEARCH,
-    user_id: str = "default"
+    user_id: str = "default",
+    where_filter: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
     """
-    Hybrid retrieval using Reciprocal Rank Fusion (RRF)
+    Hybrid retrieval with optional metadata filtering.
     """
 
-    dense_results = retrieve_dense(query, top_k=top_k * 2, user_id=user_id)
-    sparse_results = retrieve_sparse(query, top_k=top_k * 2, user_id=user_id)
+    dense_results = retrieve_dense(query, top_k=top_k * 2, user_id=user_id, where_filter=where_filter)
+    sparse_results = retrieve_sparse(query, top_k=top_k * 2, user_id=user_id, where_filter=where_filter)
 
     merged = {}
 

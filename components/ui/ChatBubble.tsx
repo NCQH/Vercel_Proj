@@ -4,18 +4,20 @@ interface ChatBubbleProps {
   role: "user" | "assistant";
   message: string;
   citations?: string[];
+  isThinking?: boolean;
 }
 
 export default function ChatBubble({
   role,
   message,
   citations = [],
+  isThinking = false,
 }: ChatBubbleProps) {
   const isAssistant = role === "assistant";
 
   return (
     <div
-      className={`group relative rounded-[24px] p-5 shadow-[0_2px_8px_rgba(15,23,42,0.04)] ${isAssistant ? "bg-gradient-to-br from-[#0F172A] to-[#1E293B] text-white border border-slate-700/60" : "bg-[#EEF2FF] text-[#1E1B4B] border border-indigo-100"} ${isAssistant ? "self-start" : "self-end"} w-full sm:max-w-[85%]`}
+      className={`group relative rounded-[24px] p-5 shadow-[0_2px_8px_rgba(15,23,42,0.04)] ${isAssistant ? "bg-gradient-to-br from-[#0F172A] to-[#1E293B] text-white border border-slate-700/60" : "bg-[#EEF2FF] text-[#1E1B4B] border border-indigo-100"} ${isAssistant ? "self-start" : "self-end"} w-full sm:max-w-[85%] transition-all duration-300`}
     >
       <div className={`flex items-center gap-3 text-xs font-bold uppercase tracking-wider ${isAssistant ? "text-slate-400" : "text-indigo-500"}`}>
         {isAssistant ? (
@@ -34,10 +36,10 @@ export default function ChatBubble({
           </div>
         )}
       </div>
-      <div className={`mt-3 text-[15px] leading-relaxed whitespace-pre-wrap ${isAssistant ? "text-slate-100" : "text-slate-800"}`}>
+      <div className={`mt-3 text-[15px] leading-relaxed whitespace-pre-wrap transition-all duration-500 ${isAssistant ? "text-slate-100" : "text-slate-800"} ${isThinking ? "italic animate-pulse opacity-70 select-none" : ""}`}>
         {message}
       </div>
-      {citations.length > 0 ? (
+      {citations.length > 0 && !isThinking ? (
         <div className="mt-4 flex flex-wrap gap-2 border-t border-white/10 pt-3">
           {citations.map((citation) => (
             <span

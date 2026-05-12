@@ -9,18 +9,32 @@ from typing import Dict, List
 from src.rag.retriever import retrieve_dense, retrieve_hybrid, retrieve_sparse
 
 
-def run(question: str, mode: str = "hybrid", top_k: int = 5, collections: List[str] = None) -> Dict[str, List[dict]]:
+def run(
+    question: str,
+    mode: str = "hybrid",
+    top_k: int = 5,
+    collections: List[str] = None,
+    allowed_sources: List[str] = None
+) -> Dict[str, List[dict]]:
     if not collections:
         collections = ["default"]
+
+    # Construct Chroma metadata filter for allowed sources
+    where_filter = None
+    if allowed_sources:
+        if len(allowed_sources) == 1:
+            where_filter = {"source": allowed_sources[0]}
+        else:
+            where_filter = {"source": {"$in": allowed_sources}}
 
     all_chunks = []
     for col in collections:
         if mode == "dense":
-            chunks = retrieve_dense(question, top_k=top_k, user_id=col)
+            chunks = retrieve_dense(question, top_k=top_k, user_id=col, where_filter=where_filter)
         elif mode == "sparse":
-            chunks = retrieve_sparse(question, top_k=top_k, user_id=col)
+            chunks = retrieve_sparse(question, top_k=top_k, user_id=col, where_filter=where_filter)
         else:
-            chunks = retrieve_hybrid(question, top_k=top_k, user_id=col)
+            chunks = retrieve_hybrid(question, top_k=top_k, user_id=col, where_filter=where_filter)
         all_chunks.extend(chunks)
 
     # Sort combined chunks using normalized relevance priority.

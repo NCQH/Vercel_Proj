@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Paperclip, Send } from "lucide-react";
+import { apiClient } from "../../lib/api-client";
 import ChatBubble from "../ui/ChatBubble";
 import MainLayout from "../app-shell/MainLayout";
 
@@ -12,6 +13,7 @@ type Message = {
   role: string;
   text: string;
   citations?: string[];
+  isThinking?: boolean;
 };
 
 
@@ -84,13 +86,10 @@ export default function StudentChat() {
       "";
     if (!identity) return;
     try {
-      const [membershipsRes, uploadsRes] = await Promise.all([
-        fetch(`/api/classes?user_id=${encodeURIComponent(identity)}&role=student`, { cache: "no-store" }),
-        fetch(`/api/uploads?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" }),
+      const [membershipsData, uploadsData] = await Promise.all([
+        apiClient.classes.list(identity, "student"),
+        apiClient.uploads.list(identity),
       ]);
-
-      const membershipsData = membershipsRes.ok ? await membershipsRes.json() : { items: [] };
-      const uploadsData = uploadsRes.ok ? await uploadsRes.json() : { items: [] };
 
       const approvedClasses = (membershipsData.items || [])
         .filter((m: { status?: string; class?: { id?: string; name?: string } }) => m.status === "approved" && m.class?.id)
@@ -98,8 +97,7 @@ export default function StudentChat() {
 
       const classFileResults = await Promise.all(
         approvedClasses.map(async (c: { id: string; name: string }) => {
-          const res = await fetch(`/api/class-files?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(c.id)}`, { cache: "no-store" });
-          const data = res.ok ? await res.json() : { items: [] };
+          const data = await apiClient.classes.listFiles(identity, c.id);
           const files = (data.items || []).map((f: { original_filename?: string }) => String(f.original_filename || "")).filter(Boolean);
           return { id: `class:${c.id}`, label: c.name, files } as SourceGroup;
         })
@@ -292,7 +290,7 @@ export default function StudentChat() {
       return [
         ...current,
         { id: userId, role: "user", text: userMessage + tagSuffix },
-        { id: assistantId, role: "assistant", text: stepText },
+        { id: assistantId, role: "assistant", text: stepText, isThinking: true },
       ];
     });
     setIsSending(true);
@@ -385,6 +383,8 @@ export default function StudentChat() {
         }
 
         const displayText = renderedText || stepText || "Agent is thinking...";
+        const isThinking = !renderedText;
+
         if (displayText !== lastRenderedDisplay) {
           lastRenderedDisplay = displayText;
           setMessages((current) => {
@@ -398,6 +398,7 @@ export default function StudentChat() {
             next[lastAssistantIndex] = {
               ...next[lastAssistantIndex],
               text: displayText,
+              isThinking: isThinking,
             };
             return next;
           });
@@ -767,6 +768,7 @@ export default function StudentChat() {
                     role={message.role as "user" | "assistant"}
                     message={message.text}
                     citations={message.citations}
+                    isThinking={message.isThinking}
                   />
                 ))}
                 <div ref={messagesEndRef} />
