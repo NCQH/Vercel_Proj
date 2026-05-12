@@ -2,14 +2,16 @@ import os
 import sys
 import logging
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from dotenv import load_dotenv
 
 # Ensure the root directory is in sys.path for relative imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from api.routes import chat, roadmap, uploads, classes
-from api.lib.supabase import _safe_user_id
+from api.lib.supabase import _safe_user_id, close_supabase_client, _supabase_cache_stats
 from api.lib.storage import storage_client
+from api.lib.async_http import close_async_client
 
 from src.memory.memory_service import (
     load_short_term_memory,
@@ -23,6 +25,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AI Teaching Assistant API")
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 # Include Routers
 app.include_router(chat.router)
@@ -30,21 +33,32 @@ app.include_router(roadmap.router)
 app.include_router(uploads.router)
 app.include_router(classes.router)
 
+
+@app.on_event("shutdown")
+async def shutdown_clients() -> None:
+    """Close shared HTTP clients to avoid leaked sockets on shutdown."""
+    await close_async_client()
+    close_supabase_client()
+
+
 # For backward compatibility with old frontend endpoints
 @app.post("/api/upload")
 async def legacy_upload(file: UploadFile = File(...), user_id: str = Form("")):
     # Maps /api/upload -> uploads.upload_file
     return await uploads.upload_file(file, user_id)
 
+
 @app.get("/api/class-files")
 async def legacy_list_class_files(user_id: str = "", class_id: str = ""):
     # Maps /api/class-files -> classes.list_files
     return classes.list_files(user_id, class_id)
 
+
 @app.post("/api/class-files/upload")
 async def legacy_upload_class_file(file: UploadFile = File(...), user_id: str = Form(""), class_id: str = Form("")):
     # Maps /api/class-files/upload -> classes.upload_class_file
     return await classes.upload_class_file(file, user_id, class_id)
+
 
 @app.get("/api/class-files/download")
 async def legacy_download_class_file(file_id: str = "", user_id: str = ""):
@@ -80,6 +94,12 @@ def memory_debug(user_id: str = "", session_id: str = "web_session", query: str 
             "summary": summary,
         },
     }
+
+
+@app.get("/api/perf/cache-stats")
+def perf_cache_stats():
+    return {"ok": True, "cache": _supabase_cache_stats()}
+
 
 @app.get("/api/health")
 def health():

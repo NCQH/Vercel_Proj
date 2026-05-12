@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "dev:backend": "uvicorn api.index:app --reload --reload-dir api --port 8000",
+    "dev:backend:workers": "uvicorn api.index:app --host 0.0.0.0 --port 8000 --workers 2",
+    "start:backend": "uvicorn api.index:app --host 0.0.0.0 --port 8000 --workers 2",
     "build": "next build",
     "start": "next start"
   },
