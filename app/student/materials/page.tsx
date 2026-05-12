@@ -349,7 +349,7 @@ export default function StudentMaterialsPage() {
                       id={`delete-personal-file-${f.file_id}`}
                       onClick={() => deletePersonalUpload(f.file_id, f.filename)}
                       disabled={Boolean(deletingFileId)}
-                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition ${busy ? "bg-rose-100 text-rose-500 cursor-not-allowed" : "bg-rose-50 text-rose-700 hover:bg-rose-100"}`}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition ${busy ? "bg-rose-100 text-rose-500 cursor-not-allowed opacity-100" : "bg-rose-50 text-rose-700 hover:bg-rose-100 opacity-0 group-hover:opacity-100"}`}
                     >
                       {busy ? "Deleting..." : "Delete"}
                     </button>

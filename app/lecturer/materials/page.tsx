@@ -18,6 +18,8 @@ export default function LecturerMaterialsPage() {
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [deletingFileId, setDeletingFileId] = useState("");
+  const [fileActionMessage, setFileActionMessage] = useState("");
 
   const identity = (session?.user as { id?: string } | undefined)?.id || session?.user?.email || session?.user?.name || "";
 
@@ -89,11 +91,41 @@ export default function LecturerMaterialsPage() {
     fd.append("class_id", selectedClassId);
     try {
       await fetch("/api/class-files/upload", { method: "POST", body: fd });
+      setFileActionMessage(`Uploaded ${file.name} successfully.`);
       await loadFiles(selectedClassId);
     } catch (err) {
       console.error("Upload failed", err);
+      setFileActionMessage("Upload failed. Please try again.");
     }
     e.target.value = "";
+  };
+
+  const deleteClassFile = async (fileId: string, filename: string) => {
+    if (!identity || !selectedClassId) return;
+    const confirmed = window.confirm(
+      `Delete \"${filename}\"?\n\nFile will be removed from class materials and AI retrieval context.`
+    );
+    if (!confirmed) return;
+
+    setDeletingFileId(fileId);
+    setFileActionMessage("");
+    try {
+      const res = await fetch(`/api/classes/files/${encodeURIComponent(fileId)}?user_id=${encodeURIComponent(identity)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFileActionMessage(data?.detail || "Delete failed. Please try again.");
+        return;
+      }
+      setFileActionMessage(`Deleted ${filename} successfully.`);
+      await loadFiles(selectedClassId);
+    } catch (err) {
+      console.error("Delete failed", err);
+      setFileActionMessage("Delete failed due to network error.");
+    } finally {
+      setDeletingFileId("");
+    }
   };
 
   return (
@@ -133,12 +165,18 @@ export default function LecturerMaterialsPage() {
                 <div key={p.id} className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 rounded-2xl border border-slate-200 p-4 shadow-[0_2px_8px_rgba(15,23,42,0.02)] hover:bg-slate-50 transition">
                   <div>
                      <div className="text-sm font-bold text-slate-900">Student ID: {p.student_id}</div>
-                     <div className="text-xs font-medium text-slate-500 mt-1">Requested to join</div>
+                     <div className="text-xs font-medium text-slate-500 mt-1">Status: {p.status}</div>
                   </div>
-                  <div className="flex gap-2 shrink-0">
-                    <button id={`approve-${p.id}`} onClick={() => approve(p.id, true)} className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-xs font-bold text-white transition shadow-sm">Approve</button>
-                    <button id={`reject-${p.id}`} onClick={() => approve(p.id, false)} className="rounded-xl bg-rose-600 hover:bg-rose-700 px-4 py-2 text-xs font-bold text-white transition shadow-sm">Reject</button>
-                  </div>
+                  {p.status === "pending" ? (
+                    <div className="flex gap-2 shrink-0">
+                      <button id={`approve-${p.id}`} onClick={() => approve(p.id, true)} className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-xs font-bold text-white transition shadow-sm">Approve</button>
+                      <button id={`reject-${p.id}`} onClick={() => approve(p.id, false)} className="rounded-xl bg-rose-600 hover:bg-rose-700 px-4 py-2 text-xs font-bold text-white transition shadow-sm">Reject</button>
+                    </div>
+                  ) : (
+                    <span className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold border ${p.status === "approved" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600 border-slate-200"}`}>
+                      {p.status === "approved" ? "Approved" : "Processed"}
+                    </span>
+                  )}
                 </div>
               ))}
               {pending.length === 0 ? <p className="text-sm font-medium text-slate-500 bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">No pending requests.</p> : null}
@@ -152,6 +190,11 @@ export default function LecturerMaterialsPage() {
              <button id="upload-class-file-btn" onClick={() => fileRef.current?.click()} className="rounded-xl bg-slate-900 hover:bg-slate-800 px-5 py-2.5 text-sm font-bold text-white transition shadow-sm">Upload Material</button>
           </div>
           <input ref={fileRef} type="file" accept=".pdf,.docx" className="hidden" onChange={uploadClassFile} />
+          {fileActionMessage ? (
+            <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
+              {fileActionMessage}
+            </p>
+          ) : null}
           <div className="mt-5 space-y-2">
             {classFiles.map((f) => (
               <div key={f.file_id} className="group flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
@@ -164,7 +207,17 @@ export default function LecturerMaterialsPage() {
                     <div className="text-[11px] text-slate-500 mt-0.5 font-medium">Uploaded: {new Date(f.uploaded_at).toLocaleDateString()}</div>
                   </div>
                 </div>
-                <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center shrink-0">Download</a>
+                <div className="flex items-center gap-2 shrink-0">
+                  <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center">Download</a>
+                  <button
+                    id={`delete-class-file-${f.file_id}`}
+                    onClick={() => deleteClassFile(f.file_id, f.original_filename)}
+                    disabled={deletingFileId === f.file_id}
+                    className="text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 px-4 py-2 rounded-xl transition disabled:opacity-60"
+                  >
+                    {deletingFileId === f.file_id ? "Deleting..." : "Delete"}
+                  </button>
+                </div>
               </div>
             ))}
             {classFiles.length === 0 ? (
