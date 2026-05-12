@@ -74,8 +74,12 @@ def generate_answer(question: str, chunks: List[dict], is_academic: bool = False
     if not is_academic:
         logger.info("[TUTOR] non-academic query, use natural response")
         prompt = f"""Bạn là AI Teaching Assistant thân thiện.
-Hãy trả lời người dùng một cách tự nhiên, lịch sự và ngắn gọn.
-Trả lời trực tiếp vào câu hỏi, không cần chia thành các phần như TL;DR hay Giải thích chính.
+Trả lời ngắn gọn, tự nhiên, đúng trọng tâm.
+
+Yêu cầu định dạng:
+- Dùng Markdown rõ ràng, dễ đọc.
+- Không tạo các mục cứng như "TL;DR", "Giải thích chính" nếu người dùng không yêu cầu.
+- Tránh lặp lại nội dung hoặc thêm phần mở rộng không cần thiết.
 
 Question: {question}
 """
@@ -86,17 +90,13 @@ Question: {question}
     if not context:
         logger.info("[TUTOR] academic query but no context, use direct structured prompt")
         prompt = f"""Bạn là AI Teaching Assistant thân thiện.
-Hãy trả lời bằng tiếng Việt tự nhiên, rõ ràng, ngắn gọn đúng trọng tâm.
+Hãy trả lời bằng tiếng Việt tự nhiên, súc tích, rõ ý.
 
-Định dạng bắt buộc:
-1) TL;DR (1-2 câu)
-2) Giải thích chính (2-5 gạch đầu dòng)
-3) Ví dụ ngắn (nếu hữu ích, tối đa 3 dòng)
-
-Quy tắc:
-- Không lặp boilerplate kiểu "nếu bạn muốn tìm hiểu thêm..." ở mọi câu trả lời.
-- Chỉ đặt câu hỏi gợi mở ở cuối khi thật sự còn mơ hồ hoặc thiếu dữ liệu.
-- Không bịa thông tin; nếu chưa chắc, nói rõ mức độ chắc chắn.
+Yêu cầu định dạng:
+- Trình bày bằng Markdown.
+- Dùng danh sách gạch đầu dòng khi cần.
+- Không thêm mục thừa hoặc boilerplate.
+- Nếu chưa chắc chắn, nói rõ ngắn gọn phần chưa chắc.
 
 Question: {question}
 """
@@ -106,20 +106,18 @@ Question: {question}
     # Case 3: Academic with retrieved context
     logger.info("[TUTOR] grounded academic answer with retrieved context")
     prompt = f"""Bạn là AI Teaching Assistant.
-Mục tiêu: hỗ trợ người học theo cách tự nhiên, rõ ràng, không máy móc.
+Mục tiêu: trả lời ngắn gọn, dễ hiểu, bám sát ngữ cảnh truy xuất.
 
-Định dạng bắt buộc:
-1) TL;DR (1-2 câu)
-2) Giải thích chính (3-6 gạch đầu dòng)
-3) Ví dụ ngắn hoặc ứng dụng (nếu phù hợp, tối đa 4 dòng)
+Yêu cầu định dạng:
+- Trình bày bằng Markdown, ưu tiên cấu trúc rõ ràng.
+- Chỉ giữ thông tin cần thiết, tránh lặp và tránh mục thừa.
+- Có thể dùng gạch đầu dòng khi giúp dễ hiểu hơn.
 
 Nguyên tắc trả lời:
 - Ưu tiên bám vào context khi có thông tin liên quan.
-- Có thể diễn giải linh hoạt để người học dễ hiểu.
-- Nếu context chưa đủ cho một phần câu hỏi, nói rõ phần nào chưa chắc chắn.
-- Không được bịa nguồn hay khẳng định chắc khi không có bằng chứng.
+- Nếu context chưa đủ cho một phần câu hỏi, nêu ngắn gọn phần chưa chắc.
+- Không bịa nguồn hay khẳng định chắc khi không có bằng chứng.
 - Khi dùng thông tin từ context, chèn chỉ số chunk liên quan dạng [n] ngay sau ý đó (ví dụ: ... [2]).
-- Không lặp boilerplate kiểu "nếu bạn muốn tìm hiểu thêm..." trừ khi thật sự cần câu hỏi làm rõ.
 
 Context:
 {context}
