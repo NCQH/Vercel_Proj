@@ -3,7 +3,11 @@ import uuid
 import logging
 import time
 import httpx
+import tempfile
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
 from api.lib.supabase import (
     _supabase_headers,
     _encode_eq,
@@ -437,6 +441,41 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
     storage_client.upload_file(bucket=CLASS_FILES_BUCKET, path=storage_path, file_data=content)
     
     item = _save_class_file_metadata(safe_user, class_id, file_id, file.filename, storage_path, len(content))
+    
+    # Ingest file into ChromaDB for RAG
+    try:
+        ext = Path(file.filename).suffix.lower()
+        docs = []
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+        
+        try:
+            if ext == ".pdf": docs = PyMuPDFLoader(tmp_path).load()
+            elif ext == ".docx": docs = Docx2txtLoader(tmp_path).load()
+            elif ext in {".txt", ".md"}: docs = TextLoader(tmp_path, encoding="utf-8").load()
+        finally:
+            try: os.unlink(tmp_path)
+            except Exception: pass
+        
+        if docs:
+            splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
+            chunks = splitter.split_documents(docs)
+            for chunk in chunks:
+                chunk.metadata = {
+                    **(chunk.metadata or {}),
+                    "class_id": class_id,
+                    "source": file.filename,
+                    "stored_path": storage_path,
+                    "file_id": file_id
+                }
+            
+            from src.rag.vectorstore import get_vectorstore, add_documents
+            add_documents(get_vectorstore(user_id=f"class_{class_id}"), chunks)
+            logger.info(f"Ingested {len(chunks)} chunks for class file {file_id} in class {class_id}")
+    except Exception as e:
+        logger.exception("RAG ingest failed for class file")
+        # Don't fail the upload, just log the error
     
     # Invalidate cache for all approved class members
     try:
