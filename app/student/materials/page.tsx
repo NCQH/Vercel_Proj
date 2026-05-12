@@ -48,6 +48,7 @@ export default function StudentMaterialsPage() {
     if (!identity) return;
     const res = await fetch(`/api/classes/public?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" });
     const data = await res.json();
+    console.log("[DEBUG] Public classes loaded:", data.items);
     setPublicClasses(data.items || []);
   };
 
@@ -152,7 +153,12 @@ export default function StudentMaterialsPage() {
 
   const requestJoin = async (classCode?: string) => {
     const code = (classCode || "").trim().toUpperCase();
-    if (!code || !identity) return;
+    console.log("[DEBUG] requestJoin called with classCode:", classCode, "-> normalized:", code);
+    if (!code || !identity) {
+      console.error("[DEBUG] Missing code or identity:", { code, identity });
+      setError("Invalid class code. Please try again.");
+      return;
+    }
     setError("");
     const fd = new FormData();
     fd.append("user_id", identity);
@@ -160,6 +166,7 @@ export default function StudentMaterialsPage() {
     try {
       const res = await fetch("/api/classes/join", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
+      console.log("[DEBUG] Join response:", { status: res.status, data });
       if (!res.ok) {
         const errorMsg = data?.detail || "Join request failed. Please try again.";
         setError(errorMsg);
@@ -168,6 +175,7 @@ export default function StudentMaterialsPage() {
       const membershipItems = await loadMemberships();
       await loadApprovedClassFiles(membershipItems);
     } catch (err) {
+      console.error("[DEBUG] Join request error:", err);
       setError("Network error. Please check your connection and try again.");
     }
   };
