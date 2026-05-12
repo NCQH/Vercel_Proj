@@ -1,6 +1,7 @@
 import os
 import uuid
 import logging
+import time
 import httpx
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response
 from api.lib.supabase import (
@@ -15,6 +16,25 @@ from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/classes")
 logger = logging.getLogger(__name__)
+
+# Lightweight in-memory cache for hot endpoint /api/classes/files/user
+USER_CLASS_FILES_CACHE_TTL_SECONDS = 20
+_user_class_files_cache: dict[str, dict] = {}
+
+def _get_cached_user_class_files(user_id: str):
+    cached = _user_class_files_cache.get(user_id)
+    if not cached:
+        return None
+    if cached.get("expires_at", 0) <= time.time():
+        _user_class_files_cache.pop(user_id, None)
+        return None
+    return cached.get("items")
+
+def _set_cached_user_class_files(user_id: str, items: list[dict]):
+    _user_class_files_cache[user_id] = {
+        "expires_at": time.time() + USER_CLASS_FILES_CACHE_TTL_SECONDS,
+        "items": items,
+    }
 
 # Helper functions for classes
 def _create_class(lecturer_id: str, name: str, description: str = "") -> dict:
@@ -79,15 +99,69 @@ def _list_pending_requests_for_lecturer(lecturer_id: str, class_id: str = "") ->
     return out
 
 def _list_all_members_for_class(lecturer_id: str, class_id: str) -> list[dict]:
-    """List all members (pending, approved, rejected) for a specific class."""
+    """List all members (pending, approved, rejected) for a specific class with student details."""
     _ensure_lecturer_class_owner(lecturer_id, class_id)
     headers = _supabase_headers()
-    url = f"{SUPABASE_URL}/rest/v1/class_members?class_id=eq.{_encode_eq(class_id)}&select=id,class_id,student_id,status,requested_at,approved_at&order=requested_at.desc"
+    
+    # Get class members
+    url = (
+        f"{SUPABASE_URL}/rest/v1/class_members"
+        f"?class_id=eq.{_encode_eq(class_id)}"
+        f"&select=id,class_id,student_id,status,requested_at,approved_at"
+        f"&order=requested_at.desc"
+    )
     with httpx.Client(timeout=15.0) as client:
         resp = client.get(url, headers=headers)
     if resp.status_code >= 300:
         raise HTTPException(status_code=500, detail=f"Failed to list class members: {resp.text}")
-    return resp.json()
+    
+    members = resp.json()
+    if not members:
+        return []
+    
+    # Get unique student IDs and convert underscore to @ for users table lookup
+    # student_id format: "huy181103_gmail.com" -> users.id format: "huy181103@gmail.com"
+    student_ids_raw = list(set(m.get("student_id") for m in members if m.get("student_id")))
+    student_ids_normalized = [sid.replace("_", "@") for sid in student_ids_raw]
+    
+    # Create mapping: normalized_id -> original_id
+    id_mapping = {sid.replace("_", "@"): sid for sid in student_ids_raw}
+    
+    # Fetch user details for all students
+    users_map = {}
+    if student_ids_normalized:
+        # Build OR query for multiple student IDs
+        or_conditions = ",".join([f"id.eq.{_encode_eq(sid)}" for sid in student_ids_normalized])
+        users_url = f"{SUPABASE_URL}/rest/v1/users?or=({or_conditions})&select=id,full_name,email"
+        
+        with httpx.Client(timeout=15.0) as client:
+            users_resp = client.get(users_url, headers=headers)
+        
+        if users_resp.status_code < 300:
+            users = users_resp.json()
+            # Map back to original student_id format (with underscore)
+            for user in users:
+                user_id = user.get("id")
+                original_id = id_mapping.get(user_id, user_id)
+                users_map[original_id] = user
+    
+    # Merge member data with user data
+    result = []
+    for member in members:
+        student_id = member.get("student_id")
+        user_data = users_map.get(student_id, {})
+        result.append({
+            "id": member.get("id"),
+            "class_id": member.get("class_id"),
+            "student_id": student_id,
+            "status": member.get("status"),
+            "requested_at": member.get("requested_at"),
+            "approved_at": member.get("approved_at"),
+            "full_name": user_data.get("full_name"),
+            "student_email": user_data.get("email"),
+        })
+    
+    return result
 
 def _approve_membership(lecturer_id: str, membership_id: str, approve: bool) -> dict:
     headers = _supabase_headers()
@@ -232,11 +306,96 @@ def approve_request(membership_id: str, user_id: str = Form(""), approve: str = 
     return {"ok": True, "item": item}
 
 @router.post("/join")
-def join_class(user_id: str = Form(""), code: str = Form("")):
+def join_class(user_id: str = Form(""), code: str = Form(""), class_code: str = Form("")):
     if not user_id: raise HTTPException(status_code=401, detail="Missing user_id")
     safe_user = _safe_user_id(user_id)
-    item = _request_to_join_class(safe_user, code)
+    # Accept both 'code' and 'class_code' for backward compatibility
+    final_code = code or class_code
+    if not final_code or not final_code.strip():
+        raise HTTPException(status_code=400, detail="Class code is required")
+    item = _request_to_join_class(safe_user, final_code)
     return {"ok": True, "item": item}
+
+@router.get("/files/user")
+def get_user_class_files(user_id: str = ""):
+    """Get all class files for user's approved classes (optimized - 1 query instead of N)."""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Missing user_id")
+    
+    safe_user = _safe_user_id(user_id)
+
+    cached_items = _get_cached_user_class_files(safe_user)
+    if cached_items is not None:
+        return {"ok": True, "items": cached_items, "cached": True}
+
+    headers = _supabase_headers()
+    
+    # Get user's approved class memberships
+    memberships_url = (
+        f"{SUPABASE_URL}/rest/v1/class_members"
+        f"?student_id=eq.{_encode_eq(safe_user)}"
+        f"&status=eq.approved"
+        f"&select=class_id,classes(id,name)"
+    )
+    
+    with httpx.Client(timeout=15.0) as client:
+        mem_resp = client.get(memberships_url, headers=headers)
+    
+    if mem_resp.status_code >= 300:
+        return {"ok": True, "items": []}
+    
+    memberships = mem_resp.json()
+    if not memberships:
+        _set_cached_user_class_files(safe_user, [])
+        return {"ok": True, "items": []}
+    
+    # Build class_id -> class_name mapping
+    class_map = {}
+    class_ids = []
+    for m in memberships:
+        class_id = m.get("class_id")
+        class_data = m.get("classes") or {}
+        class_name = class_data.get("name", "Unknown")
+        if class_id:
+            class_ids.append(class_id)
+            class_map[class_id] = class_name
+    
+    if not class_ids:
+        _set_cached_user_class_files(safe_user, [])
+        return {"ok": True, "items": []}
+    
+    # Get all files for these classes in ONE query using OR
+    or_conditions = ",".join([f"class_id.eq.{_encode_eq(cid)}" for cid in class_ids])
+    files_url = (
+        f"{SUPABASE_URL}/rest/v1/class_files"
+        f"?or=({or_conditions})"
+        f"&select=file_id,class_id,original_filename,size_bytes,uploaded_at"
+        f"&order=uploaded_at.desc"
+    )
+    
+    with httpx.Client(timeout=15.0) as client:
+        files_resp = client.get(files_url, headers=headers)
+    
+    if files_resp.status_code >= 300:
+        return {"ok": True, "items": []}
+    
+    files = files_resp.json()
+    
+    # Add class_name to each file
+    items = []
+    for f in files:
+        class_id = f.get("class_id")
+        items.append({
+            "file_id": f.get("file_id"),
+            "class_id": class_id,
+            "class_name": class_map.get(class_id, "Unknown"),
+            "original_filename": f.get("original_filename"),
+            "size_bytes": f.get("size_bytes"),
+            "uploaded_at": f.get("uploaded_at"),
+        })
+
+    _set_cached_user_class_files(safe_user, items)
+    return {"ok": True, "items": items, "cached": False}
 
 @router.get("/files/list")
 def list_files(user_id: str = "", class_id: str = ""):
@@ -304,3 +463,134 @@ def download_class_file_route(file_id: str = "", user_id: str = ""):
     
     content = storage_client.download_file(bucket=CLASS_FILES_BUCKET, path=item.get("stored_path"))
     return Response(content=content, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{item.get("original_filename") or "download.bin"}"'})
+
+@router.delete("/{class_id}")
+def delete_class(class_id: str, user_id: str = ""):
+    """Delete a class (lecturer only). Cascades to members and files."""
+    if not user_id or not class_id:
+        raise HTTPException(status_code=400, detail="Missing user_id or class_id")
+    
+    safe_user = _safe_user_id(user_id)
+    _ensure_lecturer_class_owner(safe_user, class_id)
+    
+    headers = _supabase_headers()
+    url = f"{SUPABASE_URL}/rest/v1/classes?id=eq.{_encode_eq(class_id)}"
+    
+    with httpx.Client(timeout=15.0) as client:
+        resp = client.delete(url, headers=headers)
+    
+    if resp.status_code >= 300:
+        raise HTTPException(status_code=500, detail=f"Failed to delete class: {resp.text}")
+    
+    logger.info(f"Deleted class {class_id} by lecturer {safe_user}")
+    return {"ok": True, "class_id": class_id, "message": "Class deleted successfully"}
+
+@router.patch("/{class_id}")
+def update_class(
+    class_id: str,
+    user_id: str = Form(""),
+    name: str = Form(None),
+    description: str = Form(None),
+    is_active: bool = Form(None)
+):
+    """Update class details (lecturer only)."""
+    if not user_id or not class_id:
+        raise HTTPException(status_code=400, detail="Missing user_id or class_id")
+    
+    safe_user = _safe_user_id(user_id)
+    _ensure_lecturer_class_owner(safe_user, class_id)
+    
+    payload = {}
+    if name is not None and name.strip():
+        payload["name"] = name.strip()
+    if description is not None:
+        payload["description"] = description.strip()
+    if is_active is not None:
+        payload["is_active"] = is_active
+    
+    if not payload:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    
+    headers = _supabase_headers()
+    headers["Prefer"] = "return=representation"
+    url = f"{SUPABASE_URL}/rest/v1/classes?id=eq.{_encode_eq(class_id)}"
+    
+    with httpx.Client(timeout=15.0) as client:
+        resp = client.patch(url, headers=headers, json=payload)
+    
+    if resp.status_code >= 300:
+        raise HTTPException(status_code=500, detail=f"Failed to update class: {resp.text}")
+    
+    rows = resp.json()
+    logger.info(f"Updated class {class_id} by lecturer {safe_user}: {payload}")
+    return {"ok": True, "item": rows[0] if rows else {}}
+
+@router.delete("/files/{file_id}")
+def delete_class_file(file_id: str, user_id: str = ""):
+    """Delete a class file (lecturer only). Removes from storage, database, and vectorstore."""
+    if not user_id or not file_id:
+        raise HTTPException(status_code=400, detail="Missing user_id or file_id")
+    
+    safe_user = _safe_user_id(user_id)
+    
+    # Lookup file metadata
+    headers = _supabase_headers()
+    lookup_url = (
+        f"{SUPABASE_URL}/rest/v1/class_files"
+        f"?file_id=eq.{_encode_eq(file_id)}"
+        f"&select=file_id,class_id,stored_path,original_filename"
+        f"&limit=1"
+    )
+    
+    with httpx.Client(timeout=15.0) as client:
+        lookup_resp = client.get(lookup_url, headers=headers)
+    
+    if lookup_resp.status_code >= 300 or not lookup_resp.json():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file_data = lookup_resp.json()[0]
+    class_id = file_data.get("class_id")
+    stored_path = file_data.get("stored_path")
+    original_filename = file_data.get("original_filename")
+    
+    # Check ownership
+    _ensure_lecturer_class_owner(safe_user, class_id)
+    
+    # Delete from database
+    delete_url = f"{SUPABASE_URL}/rest/v1/class_files?file_id=eq.{_encode_eq(file_id)}"
+    with httpx.Client(timeout=15.0) as client:
+        del_resp = client.delete(delete_url, headers=headers)
+    
+    if del_resp.status_code >= 300:
+        raise HTTPException(status_code=500, detail="Failed to delete file metadata")
+    
+    # Delete from storage
+    file_deleted = False
+    if storage_client and stored_path:
+        try:
+            storage_client.delete_file(bucket=CLASS_FILES_BUCKET, path=stored_path)
+            file_deleted = True
+        except Exception as e:
+            logger.warning(f"Failed to delete file from storage: {e}")
+    
+    # Delete from vectorstore
+    vector_deleted = False
+    if original_filename:
+        try:
+            from src.rag.vectorstore import get_vectorstore
+            vectorstore = get_vectorstore(user_id=f"class_{class_id}")
+            collection = getattr(vectorstore, "_collection", None)
+            if collection:
+                collection.delete(where={"source": original_filename})
+                vector_deleted = True
+        except Exception as e:
+            logger.warning(f"Failed to delete from vectorstore: {e}")
+    
+    logger.info(f"Deleted class file {file_id} from class {class_id} by lecturer {safe_user}")
+    return {
+        "ok": True,
+        "file_id": file_id,
+        "file_deleted": file_deleted,
+        "vector_deleted": vector_deleted,
+        "message": "File deleted successfully"
+    }

@@ -31,6 +31,9 @@ export default function StudentMaterialsPage() {
   const [classFiles, setClassFiles] = useState<ClassFile[]>([]);
   const [personalUploads, setPersonalUploads] = useState<PersonalUpload[]>([]);
   const [deletingFileId, setDeletingFileId] = useState("");
+  const [joiningClassId, setJoiningClassId] = useState("");
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isClassFilesLoading, setIsClassFilesLoading] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -64,45 +67,24 @@ export default function StudentMaterialsPage() {
     return items;
   };
 
-  const loadClassFiles = async (classId: string) => {
-    if (!identity || !classId) return [] as ClassFile[];
-    const res = await fetch(`/api/class-files?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(classId)}`, { cache: "no-store" });
-    if (!res.ok) {
-      return [] as ClassFile[];
-    }
-    const data = await res.json();
-    return (data.items || []) as ClassFile[];
-  };
-
-  const loadApprovedClassFiles = async (items: MembershipItem[]) => {
-    const classNameById = new Map(publicClasses.map((c) => [c.id, c.name]));
-
-    const approvedClasses = items
-      .filter((m) => m.status === "approved")
-      .map((m) => {
-        const raw = m as MembershipItem & {
-          class_id?: string;
-          class_name?: string;
-          class?: { id?: string; name?: string };
-        };
-        const id = raw.class?.id || raw.class_id || "";
-        const name = raw.class?.name || raw.class_name || (id ? classNameById.get(id) : undefined) || "Unknown class";
-        return { id, name };
-      })
-      .filter((c) => Boolean(c.id));
-
-    if (approvedClasses.length === 0) {
+  const loadApprovedClassFiles = async () => {
+    if (!identity) {
       setClassFiles([]);
       return;
     }
 
-    const filesByClass = await Promise.all(
-      approvedClasses.map(async (c) => {
-        const files = await loadClassFiles(c.id);
-        return files.map((f) => ({ ...f, class_id: c.id, class_name: c.name }));
-      })
-    );
-    setClassFiles(filesByClass.flat());
+    setIsClassFilesLoading(true);
+    try {
+      const res = await fetch(`/api/classes/files/user?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" });
+      if (!res.ok) {
+        return;
+      }
+
+      const data = await res.json();
+      setClassFiles((data.items || []) as ClassFile[]);
+    } finally {
+      setIsClassFilesLoading(false);
+    }
   };
 
   const loadPersonalUploads = async () => {
@@ -120,25 +102,25 @@ export default function StudentMaterialsPage() {
     if (status !== "authenticated") return;
 
     const initData = async () => {
-      const [, membershipItems] = await Promise.all([
-        loadPublicClasses(),
-        loadMemberships(),
-      ]);
+      setIsInitialLoading(true);
+      try {
+        await Promise.all([
+          loadPublicClasses(),
+          loadMemberships(),
+        ]);
 
-      await Promise.all([
-        loadApprovedClassFiles(membershipItems),
-        loadPersonalUploads(),
-      ]);
+        await Promise.all([
+          loadApprovedClassFiles(),
+          loadPersonalUploads(),
+        ]);
+      } finally {
+        setIsInitialLoading(false);
+      }
     };
 
     initData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, identity]);
-
-  useEffect(() => {
-    loadApprovedClassFiles(memberships);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [memberships]);
 
   useEffect(() => {
     if (!identity) return;
@@ -151,32 +133,55 @@ export default function StudentMaterialsPage() {
     }
   }, [classFiles, identity]);
 
-  const requestJoin = async (classCode?: string) => {
-    const code = (classCode || "").trim().toUpperCase();
-    console.log("[DEBUG] requestJoin called with classCode:", classCode, "-> normalized:", code);
-    if (!code || !identity) {
-      console.error("[DEBUG] Missing code or identity:", { code, identity });
+  const requestJoin = async (targetClass?: PublicClass) => {
+    const code = (targetClass?.code || "").trim().toUpperCase();
+    if (!code || !identity || !targetClass?.id || joiningClassId) {
       setError("Invalid class code. Please try again.");
       return;
     }
+
     setError("");
+    setJoiningClassId(targetClass.id);
+
+    const optimisticMembershipId = `optimistic-${targetClass.id}`;
+    setMemberships((prev) => {
+      const existed = prev.some((m) => m.class?.id === targetClass.id);
+      if (existed) return prev;
+      return [
+        {
+          membership_id: optimisticMembershipId,
+          status: "pending",
+          class: {
+            id: targetClass.id,
+            name: targetClass.name,
+            code: targetClass.code,
+            description: targetClass.description,
+          },
+        },
+        ...prev,
+      ];
+    });
+
     const fd = new FormData();
     fd.append("user_id", identity);
     fd.append("class_code", code);
+
     try {
       const res = await fetch("/api/classes/join", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
-      console.log("[DEBUG] Join response:", { status: res.status, data });
       if (!res.ok) {
+        setMemberships((prev) => prev.filter((m) => m.membership_id !== optimisticMembershipId));
         const errorMsg = data?.detail || "Join request failed. Please try again.";
         setError(errorMsg);
         return;
       }
-      const membershipItems = await loadMemberships();
-      await loadApprovedClassFiles(membershipItems);
-    } catch (err) {
-      console.error("[DEBUG] Join request error:", err);
+      await loadMemberships();
+      await loadApprovedClassFiles();
+    } catch {
+      setMemberships((prev) => prev.filter((m) => m.membership_id !== optimisticMembershipId));
       setError("Network error. Please check your connection and try again.");
+    } finally {
+      setJoiningClassId("");
     }
   };
 
@@ -220,9 +225,17 @@ export default function StudentMaterialsPage() {
           <div className="rounded-3xl border border-slate-200 bg-white p-6">
             <h2 className="text-xl font-semibold text-slate-900">Available Classes</h2>
             <div className="mt-3 space-y-2">
-              {publicClasses.map((c) => {
+              {isInitialLoading ? (
+                Array.from({ length: 3 }).map((_, idx) => (
+                  <div key={`class-skeleton-${idx}`} className="animate-pulse rounded-[24px] border border-slate-200 p-5">
+                    <div className="h-5 w-40 rounded bg-slate-200" />
+                    <div className="mt-2 h-4 w-52 rounded bg-slate-100" />
+                  </div>
+                ))
+              ) : publicClasses.map((c) => {
                 const isApproved = memberships.some((m) => m.status === "approved" && m.class?.id === c.id);
                 const isPending = memberships.some((m) => m.status === "pending" && m.class?.id === c.id);
+                const isJoining = joiningClassId === c.id;
                 return (
                 <div key={c.id} className="rounded-[24px] border border-slate-200 p-5 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:shadow-md transition">
                   <div className="flex justify-between items-start gap-4">
@@ -234,7 +247,7 @@ export default function StudentMaterialsPage() {
                        </div>
                      </div>
                      {!isApproved && !isPending ? (
-                       <button id={`request-join-${c.id}`} onClick={() => requestJoin(c.code)} className="shrink-0 rounded-xl bg-slate-900 hover:bg-slate-800 px-4 py-2 text-xs font-bold text-white transition shadow-sm">Join Class</button>
+                       <button id={`request-join-${c.id}`} onClick={() => requestJoin(c)} disabled={Boolean(joiningClassId)} className="shrink-0 rounded-xl bg-slate-900 hover:bg-slate-800 px-4 py-2 text-xs font-bold text-white transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">{isJoining ? "Sending..." : "Join Class"}</button>
                      ) : isPending ? (
                        <span className="shrink-0 rounded-xl bg-amber-50 text-amber-700 px-4 py-2 text-xs font-bold border border-amber-200">Pending</span>
                      ) : (
@@ -250,7 +263,14 @@ export default function StudentMaterialsPage() {
           <div className="rounded-3xl border border-slate-200 bg-white p-6">
             <h2 className="text-xl font-semibold text-slate-900">My Memberships</h2>
             <div className="mt-3 space-y-2">
-              {memberships.map((m) => (
+              {isInitialLoading ? (
+                Array.from({ length: 2 }).map((_, idx) => (
+                  <div key={`member-skeleton-${idx}`} className="animate-pulse rounded-[20px] border border-slate-200 px-4 py-3">
+                    <div className="h-4 w-36 rounded bg-slate-200" />
+                    <div className="mt-2 h-3 w-24 rounded bg-slate-100" />
+                  </div>
+                ))
+              ) : memberships.map((m) => (
                 <button key={m.membership_id} id={`membership-${m.membership_id}`} onClick={() => m.class?.id && setSelectedClassId(m.class.id)} className={`w-full flex items-center justify-between rounded-[20px] border px-4 py-3 text-left transition hover:shadow-md ${selectedClassId === m.class?.id ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
                   <div>
                      <div className="font-bold text-slate-900">{m.class?.name || "Unknown class"}</div>
@@ -259,7 +279,7 @@ export default function StudentMaterialsPage() {
                   {selectedClassId === m.class?.id && <div className="h-2 w-2 rounded-full bg-brand-600"></div>}
                 </button>
               ))}
-              {memberships.length === 0 && <p className="text-sm text-slate-500 p-4 text-center">You haven't joined any classes yet.</p>}
+              {!isInitialLoading && memberships.length === 0 && <p className="text-sm text-slate-500 p-4 text-center">You haven't joined any classes yet.</p>}
             </div>
           </div>
         </div>
@@ -267,7 +287,20 @@ export default function StudentMaterialsPage() {
         <div className="rounded-3xl border border-slate-200 bg-white p-6">
           <h2 className="text-xl font-semibold text-slate-900">Approved Class Files</h2>
           <div className="mt-3 space-y-2">
-            {classFiles.map((f) => (
+            {isClassFilesLoading ? (
+              Array.from({ length: 3 }).map((_, idx) => (
+                <div key={`file-skeleton-${idx}`} className="animate-pulse flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-xl bg-slate-200" />
+                    <div>
+                      <div className="h-4 w-40 rounded bg-slate-200" />
+                      <div className="mt-2 h-3 w-28 rounded bg-slate-100" />
+                    </div>
+                  </div>
+                  <div className="h-8 w-20 rounded-xl bg-slate-100" />
+                </div>
+              ))
+            ) : classFiles.map((f) => (
               <div key={`${f.class_id || "no-class"}-${f.file_id}`} className="group flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
@@ -281,7 +314,7 @@ export default function StudentMaterialsPage() {
                 <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center shrink-0">Download</a>
               </div>
             ))}
-            {classFiles.length === 0 ? (
+            {!isClassFilesLoading && classFiles.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-center rounded-[24px] border border-dashed border-slate-300 bg-slate-50">
                 <div className="text-4xl mb-3">📂</div>
                 <h3 className="font-bold text-slate-900 text-lg mb-1">No materials yet</h3>

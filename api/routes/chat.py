@@ -1,5 +1,4 @@
 import json
-import asyncio
 import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -163,6 +162,25 @@ async def chat_stream(request: ChatRequest):
 
             final_answer = ""
             sources = []
+            streamed_text = ""
+
+            def _extract_chunk_text(chunk_obj) -> str:
+                if chunk_obj is None:
+                    return ""
+                content = getattr(chunk_obj, "content", "")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    parts = []
+                    for item in content:
+                        if isinstance(item, str):
+                            parts.append(item)
+                        elif isinstance(item, dict):
+                            text_part = item.get("text")
+                            if isinstance(text_part, str):
+                                parts.append(text_part)
+                    return "".join(parts)
+                return ""
 
             async for event in graph.astream_events(initial_state, version="v2", config={"recursion_limit": 25}):
                 kind = event["event"]
@@ -179,14 +197,21 @@ async def chat_stream(request: ChatRequest):
                         yield '__STEP__:Drafting response...\n'
                     elif name == "save_memory":
                         yield '__STEP__:Updating context...\n'
-                
+
+                elif kind == "on_chat_model_stream":
+                    chunk_obj = event.get("data", {}).get("chunk")
+                    token = _extract_chunk_text(chunk_obj)
+                    if token:
+                        streamed_text += token
+                        yield f"__CHUNK__:{token}\n"
+
                 elif kind == "on_chain_end":
                     output = event.get("data", {}).get("output")
                     if isinstance(output, dict):
                         if "final_answer" in output and output["final_answer"]:
                             final_answer = output["final_answer"]
                             sources = output.get("sources", [])
-                        
+
                         if "messages" in output:
                             messages = output.get("messages", [])
                             for msg in reversed(messages):
@@ -195,7 +220,7 @@ async def chat_stream(request: ChatRequest):
                                     sources = output.get("sources", [])
                                     break
 
-            text = final_answer or ""
+            text = (streamed_text or final_answer or "").strip()
 
             _save_chat_message(safe_user, request.session_id, "user", safe_message)
             _save_chat_message(
@@ -207,12 +232,6 @@ async def chat_stream(request: ChatRequest):
             )
 
             yield '__STEP__:Done\n'
-
-            words = text.split(" ")
-            for i, word in enumerate(words):
-                chunk = (word + " ") if i < len(words) - 1 else word
-                yield f"__CHUNK__:{chunk}\n"
-                await asyncio.sleep(0.015)
 
             if sources:
                 yield f"__SOURCES__:{json.dumps(sources, ensure_ascii=False)}\n"
