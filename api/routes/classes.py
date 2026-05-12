@@ -104,16 +104,48 @@ def _request_to_join_class(student_id: str, code: str) -> dict:
     cls_url = f"{SUPABASE_URL}/rest/v1/classes?code=eq.{_encode_eq(code.strip().upper())}&select=id,is_active&limit=1"
     with httpx.Client(timeout=15.0) as client:
         cls_resp = client.get(cls_url, headers=headers)
-    if cls_resp.status_code >= 300: raise HTTPException(status_code=500, detail="Class lookup failed")
+    
+    if cls_resp.status_code >= 300:
+        logger.error(f"Class lookup failed: status={cls_resp.status_code} body={cls_resp.text}")
+        raise HTTPException(status_code=500, detail="Class lookup failed")
+    
     cls_rows = cls_resp.json()
-    if not cls_rows: raise HTTPException(status_code=404, detail="Class not found with this code")
+    if not cls_rows:
+        logger.warning(f"Class not found with code: {code}")
+        raise HTTPException(status_code=404, detail="Class not found with this code")
+    
     class_id = cls_rows[0].get("id")
+    
+    # Check if student already has a membership (pending, approved, or rejected)
+    check_url = f"{SUPABASE_URL}/rest/v1/class_members?student_id=eq.{_encode_eq(student_id)}&class_id=eq.{_encode_eq(class_id)}&select=id,status&limit=1"
+    with httpx.Client(timeout=15.0) as client:
+        check_resp = client.get(check_url, headers=headers)
+    
+    if check_resp.status_code < 300 and check_resp.json():
+        existing = check_resp.json()[0]
+        existing_status = existing.get("status")
+        logger.info(f"Student {student_id} already has membership in class {class_id} with status {existing_status}")
+        if existing_status == "pending":
+            raise HTTPException(status_code=400, detail="You already have a pending request for this class")
+        elif existing_status == "approved":
+            raise HTTPException(status_code=400, detail="You are already a member of this class")
+        elif existing_status == "rejected":
+            raise HTTPException(status_code=400, detail="Your previous request was rejected. Please contact the instructor.")
     
     payload = {"class_id": class_id, "student_id": student_id, "status": "pending"}
     with httpx.Client(timeout=15.0) as client:
         join_resp = client.post(f"{SUPABASE_URL}/rest/v1/class_members", headers=headers, json=payload)
-    if join_resp.status_code >= 300: raise HTTPException(status_code=500, detail="Failed to request join")
-    return join_resp.json()[0]
+    
+    if join_resp.status_code >= 300:
+        logger.error(f"Failed to request join: status={join_resp.status_code} body={join_resp.text}")
+        raise HTTPException(status_code=500, detail=f"Failed to request join: {join_resp.text}")
+    
+    result = join_resp.json()
+    if not result:
+        logger.error("Join request returned empty response")
+        raise HTTPException(status_code=500, detail="Join request returned empty response")
+    
+    return result[0]
 
 def _is_student_approved_in_class(student_id: str, class_id: str) -> bool:
     headers = _supabase_headers()

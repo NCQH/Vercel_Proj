@@ -157,13 +157,19 @@ export default function StudentMaterialsPage() {
     const fd = new FormData();
     fd.append("user_id", identity);
     fd.append("class_code", code);
-    const res = await fetch("/api/classes/join", { method: "POST", body: fd });
-    if (!res.ok) {
-      setError("Join request failed");
-      return;
+    try {
+      const res = await fetch("/api/classes/join", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errorMsg = data?.detail || "Join request failed. Please try again.";
+        setError(errorMsg);
+        return;
+      }
+      const membershipItems = await loadMemberships();
+      await loadApprovedClassFiles(membershipItems);
+    } catch (err) {
+      setError("Network error. Please check your connection and try again.");
     }
-    const membershipItems = await loadMemberships();
-    await loadApprovedClassFiles(membershipItems);
   };
 
   const deletePersonalUpload = async (fileId: string, filename: string) => {
