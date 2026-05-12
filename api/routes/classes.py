@@ -217,6 +217,15 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
     item = _save_class_file_metadata(safe_user, class_id, file_id, file.filename, storage_path, len(content))
     return {"ok": True, "item": item}
 
+@router.get("/public")
+def list_public_classes(user_id: str = ""):
+    """List all active public classes available for students to join."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Missing user_id")
+    safe_user = _safe_user_id(user_id)
+    items = _list_public_classes()
+    return {"ok": True, "items": items}
+
 @router.get("/files/download_file")
 def download_class_file_route(file_id: str = "", user_id: str = ""):
     if not user_id or not file_id: raise HTTPException(status_code=400, detail="Missing parameters")

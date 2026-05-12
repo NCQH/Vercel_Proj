@@ -70,8 +70,21 @@ def generate_answer(question: str, chunks: List[dict], is_academic: bool = False
         logger.info("[TUTOR] low confidence fallback triggered threshold=0.03 min_chunks=2")
         return {"answer": _LOW_CONFIDENCE_REPLY, "used_sources": []}
 
+    # Case 1: Non-academic (greetings, small talk, general help)
+    if not is_academic:
+        logger.info("[TUTOR] non-academic query, use natural response")
+        prompt = f"""Bạn là AI Teaching Assistant thân thiện.
+Hãy trả lời người dùng một cách tự nhiên, lịch sự và ngắn gọn.
+Trả lời trực tiếp vào câu hỏi, không cần chia thành các phần như TL;DR hay Giải thích chính.
+
+Question: {question}
+"""
+        resp = _llm.invoke(prompt)
+        return {"answer": (resp.content or "").strip(), "used_sources": []}
+
+    # Case 2: Academic but no context found
     if not context:
-        logger.info("[TUTOR] no context, use direct tutor prompt")
+        logger.info("[TUTOR] academic query but no context, use direct structured prompt")
         prompt = f"""Bạn là AI Teaching Assistant thân thiện.
 Hãy trả lời bằng tiếng Việt tự nhiên, rõ ràng, ngắn gọn đúng trọng tâm.
 
@@ -90,7 +103,8 @@ Question: {question}
         resp = _llm.invoke(prompt)
         return {"answer": (resp.content or "").strip(), "used_sources": []}
 
-    logger.info("[TUTOR] grounded answer with retrieved context")
+    # Case 3: Academic with retrieved context
+    logger.info("[TUTOR] grounded academic answer with retrieved context")
     prompt = f"""Bạn là AI Teaching Assistant.
 Mục tiêu: hỗ trợ người học theo cách tự nhiên, rõ ràng, không máy móc.
 
