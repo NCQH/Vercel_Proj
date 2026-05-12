@@ -78,6 +78,17 @@ def _list_pending_requests_for_lecturer(lecturer_id: str, class_id: str = "") ->
             if resp.status_code < 300: out.extend(resp.json())
     return out
 
+def _list_all_members_for_class(lecturer_id: str, class_id: str) -> list[dict]:
+    """List all members (pending, approved, rejected) for a specific class."""
+    _ensure_lecturer_class_owner(lecturer_id, class_id)
+    headers = _supabase_headers()
+    url = f"{SUPABASE_URL}/rest/v1/class_members?class_id=eq.{_encode_eq(class_id)}&select=id,class_id,student_id,status,requested_at,approved_at&order=requested_at.desc"
+    with httpx.Client(timeout=15.0) as client:
+        resp = client.get(url, headers=headers)
+    if resp.status_code >= 300:
+        raise HTTPException(status_code=500, detail=f"Failed to list class members: {resp.text}")
+    return resp.json()
+
 def _approve_membership(lecturer_id: str, membership_id: str, approve: bool) -> dict:
     headers = _supabase_headers()
     headers["Prefer"] = "return=representation"
@@ -201,6 +212,15 @@ def list_pending_requests(user_id: str = "", class_id: str = ""):
     if not user_id: raise HTTPException(status_code=401, detail="Missing user_id")
     safe_user = _safe_user_id(user_id)
     items = _list_pending_requests_for_lecturer(safe_user, class_id)
+    return {"ok": True, "items": items}
+
+@router.get("/members")
+def list_class_members(user_id: str = "", class_id: str = ""):
+    """List all members (pending, approved, rejected) for a specific class."""
+    if not user_id or not class_id:
+        raise HTTPException(status_code=400, detail="Missing user_id or class_id")
+    safe_user = _safe_user_id(user_id)
+    items = _list_all_members_for_class(safe_user, class_id)
     return {"ok": True, "items": items}
 
 @router.post("/members/{membership_id}/approve")
