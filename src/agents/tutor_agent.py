@@ -17,32 +17,6 @@ logger = logging.getLogger(__name__)
 
 _llm = ChatOpenAI(model=DEFAULT_MODEL, api_key=OPENAI_API_KEY, temperature=0.3)
 
-_ACADEMIC_CLASSIFIER_PROMPT = """You are a strict classifier.
-Decide whether user question is related to studying, academic learning, school subjects,
-course content, exam prep, concepts/definitions, or educational topics.
-
-Return STRICT JSON only:
-{"academic": true|false, "reason": "short"}
-"""
-
-_FALLBACK_ACADEMIC_KEYWORDS = (
-    "học",
-    "học tập",
-    "bài giảng",
-    "môn",
-    "khái niệm",
-    "định nghĩa",
-    "lecture",
-    "course",
-    "chapter",
-    "syllabus",
-    "exam",
-    "assignment",
-    "machine learning",
-    "thuật toán",
-    "mô hình",
-)
-
 _LOW_CONFIDENCE_REPLY = (
     "Mình chưa thấy đủ thông tin đáng tin trong tài liệu để trả lời chắc chắn câu này. "
     "Bạn có thể cung cấp rõ hơn tên bài giảng/chương hoặc thêm tài liệu liên quan để mình tra cứu lại chính xác hơn."
@@ -59,31 +33,6 @@ def _format_context(chunks: List[dict]) -> str:
     return "\n\n".join(lines)
 
 
-def _is_academic_question(question: str) -> bool:
-    q = (question or "").strip()
-    if not q:
-        return False
-
-    try:
-        resp = _llm.invoke(
-            [
-                {"role": "system", "content": _ACADEMIC_CLASSIFIER_PROMPT},
-                {"role": "user", "content": q},
-            ]
-        )
-        raw = (resp.content or "").strip()
-        data = json.loads(raw)
-        academic = bool(data.get("academic", False))
-        reason = str(data.get("reason", ""))
-        logger.info("[TUTOR] academic_classifier academic=%s reason=%s", academic, reason)
-        return academic
-    except Exception as exc:
-        q_lower = q.lower()
-        fallback = any(k in q_lower for k in _FALLBACK_ACADEMIC_KEYWORDS)
-        logger.warning("[TUTOR] academic_classifier fallback=%s err=%s", fallback, exc)
-        return fallback
-
-
 def _max_retrieval_score(chunks: List[dict]) -> float:
     if not chunks:
         return 0.0
@@ -93,10 +42,9 @@ def _max_retrieval_score(chunks: List[dict]) -> float:
     )
 
 
-def generate_answer(question: str, chunks: List[dict]) -> Dict[str, str | List[str]]:
+def generate_answer(question: str, chunks: List[dict], is_academic: bool = False) -> Dict[str, str | List[str]]:
     """Generate a flexible, grounded tutoring answer."""
     context = _format_context(chunks)
-    is_academic = _is_academic_question(question)
     max_score = _max_retrieval_score(chunks)
     sources_with_scores = []
     for chunk in chunks or []:

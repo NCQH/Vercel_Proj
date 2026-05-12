@@ -20,7 +20,8 @@ def tutor_node(state: AgentState) -> dict:
             break
 
     chunks = state.get("retrieved_chunks", [])
-    result = generate_answer(question, chunks)
+    is_academic = state.get("is_academic", False)
+    result = generate_answer(question, chunks, is_academic=is_academic)
     answer = result.get("answer", "")
     used_sources = result.get("used_sources", [])
     return {

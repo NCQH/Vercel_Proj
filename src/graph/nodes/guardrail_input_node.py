@@ -32,6 +32,8 @@ def guardrail_input_node(state: AgentState) -> dict:
     safe = result.get("safe", True)
     category = result.get("category", "unknown")
     reason = result.get("reason", "")
+    route = result.get("route", "direct")
+    is_academic = result.get("is_academic", False)
 
     if not safe:
         rejection_msg = get_rejection_message(category)
@@ -47,7 +49,13 @@ def guardrail_input_node(state: AgentState) -> dict:
             "guardrail_passed": False,
             "guardrail_rejection": rejection_msg,
             "final_answer": rejection_msg,
+            "route": "direct",
+            "is_academic": False,
         }
 
-    logger.info("[GUARDRAIL_INPUT] passed user_id=%s session_id=%s", user_id, session_id)
-    return {"guardrail_passed": True}
+    logger.info("[GUARDRAIL_INPUT] passed user_id=%s session_id=%s route=%s is_academic=%s", user_id, session_id, route, is_academic)
+    return {
+        "guardrail_passed": True,
+        "route": route,
+        "is_academic": is_academic,
+    }

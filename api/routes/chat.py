@@ -156,6 +156,9 @@ async def chat_stream(request: ChatRequest):
                 "route_reason": "",
                 "retrieved_chunks": [],
                 "final_answer": "",
+                "guardrail_passed": True,
+                "guardrail_rejection": "",
+                "is_academic": False,
             }
 
             final_answer = ""
@@ -169,9 +172,7 @@ async def chat_stream(request: ChatRequest):
                     if name == "load_memory":
                         yield '__STEP__:Loading memory context...\n'
                     elif name == "guardrail_input":
-                        yield '__STEP__:Checking content safety...\n'
-                    elif name == "router":
-                        yield '__STEP__:Analyzing intent...\n'
+                        yield '__STEP__:Checking content safety & intent...\n'
                     elif name == "retrieval":
                         yield '__STEP__:Searching knowledge base...\n'
                     elif name == "tutor":

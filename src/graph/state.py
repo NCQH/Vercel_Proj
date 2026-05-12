@@ -50,3 +50,4 @@ class AgentState(TypedDict):
     final_answer: str
     guardrail_passed: bool
     guardrail_rejection: str
+    is_academic: bool

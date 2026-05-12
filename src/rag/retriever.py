@@ -76,25 +76,49 @@ def build_bm25_index(docs: List[Dict[str, Any]]):
     BM25_INDEX = BM25Okapi(tokenized_corpus)
 
 
+import threading
+
+# Cache for BM25 to avoid re-tokenizing everything every time
+_bm25_cache = {}
+_bm25_cache_lock = threading.Lock()
+
 def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "default", where_filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
-    BM25 sparse retrieval with optional metadata filtering.
+    BM25 sparse retrieval with optional metadata filtering and caching.
     """
-
     vectorstore = get_vectorstore(user_id=user_id)
-    raw = vectorstore.get(where=where_filter, include=["documents", "metadatas"])
-    docs = raw.get("documents") or []
-    metas = raw.get("metadatas") or []
+    
+    # Cache key based on user_id and filter
+    cache_key = f"{user_id}_{hashlib.md5(str(where_filter).encode()).hexdigest()}"
+    
+    global _bm25_cache
+    with _bm25_cache_lock:
+        cached_data = _bm25_cache.get(cache_key)
+    
+    # We should ideally check if the collection has changed, but for now we'll fetch docs
+    # if not cached or we want to be safe. To be truly scalable, we'd limit this.
+    if cached_data:
+        bm25, docs, metas = cached_data
+    else:
+        # Optimization: Limit the number of documents fetched for sparse search to 300
+        # to stay within Chroma Cloud quota limits.
+        raw = vectorstore.get(where=where_filter, include=["documents", "metadatas"], limit=300)
+        docs = raw.get("documents") or []
+        metas = raw.get("metadatas") or []
 
-    if not docs:
-        return []
+        if not docs:
+            return []
+
+        tokenized_corpus = [tokenize(doc) for doc in docs]
+        bm25 = BM25Okapi(tokenized_corpus)
+        
+        with _bm25_cache_lock:
+            _bm25_cache[cache_key] = (bm25, docs, metas)
 
     tokenized_query = tokenize(query)
     if not tokenized_query:
         return []
 
-    tokenized_corpus = [tokenize(doc) for doc in docs]
-    bm25 = BM25Okapi(tokenized_corpus)
     scores = bm25.get_scores(tokenized_query)
 
     top_indices = sorted(
@@ -106,6 +130,7 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH, user_id: str = "defau
     results: List[Dict[str, Any]] = []
     for idx in top_indices:
         sparse_score = float(scores[idx])
+        if sparse_score <= 0: continue # Only keep positive matches
         results.append({
             "text": docs[idx],
             "metadata": metas[idx] if idx < len(metas) else {},

@@ -58,6 +58,9 @@ def run_agent(
         "route_reason": "",
         "retrieved_chunks": [],
         "final_answer": "",
+        "guardrail_passed": True,
+        "guardrail_rejection": "",
+        "is_academic": False,
     }
 
     # Invoke the compiled LangGraph (recursion_limit acts as max_turns)

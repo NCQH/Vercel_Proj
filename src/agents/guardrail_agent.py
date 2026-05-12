@@ -34,10 +34,13 @@ _EXAM_CHEATING_PATTERNS = [
     r"\b(solve\s+this\s+(exam|quiz|test)\s+for\s+me)\b",
 ]
 
-_GUARDRAIL_PROMPT = """You are a content safety classifier for an AI Teaching Assistant.
+_GUARDRAIL_PROMPT = """You are a classifier for an AI Teaching Assistant.
+Your task is to analyze user input for:
+1. Safety (Guardrails)
+2. Intent (Routing: retrieval or direct)
+3. Content Type (Is it academic/study-related?)
 
-Evaluate if the user input is appropriate for an educational context.
-
+SAFETY RULES:
 REJECT if:
 - Contains violence, sexual content, hate speech, or discrimination
 - Requests direct exam/quiz answers or academic dishonesty
@@ -45,18 +48,21 @@ REJECT if:
 - Requests medical, legal, or financial advice
 - Completely unrelated to learning/education
 
-ALLOW if:
-- Asks for learning help, explanations, or study guidance
-- Requests clarification on academic concepts
-- General academic questions
-- Questions about uploaded files, course materials, or documents (e.g., "summarize file X", "explain document Y")
-- Questions that reference specific files or materials the user has access to
+ROUTING RULES:
+- route="retrieval" if question is related to studying, academic concepts, course materials, or requires specific facts.
+- route="direct" if it's small talk, general help, or greeting.
 
-IMPORTANT: If the input mentions files, documents, or course materials, it is EDUCATIONAL and should be ALLOWED.
-The system has access to user's uploaded files and will retrieve the content automatically.
+ACADEMIC RULE:
+- is_academic=true if it's about a specific subject, definition, formula, or learning material.
 
 Return STRICT JSON only:
-{"safe": true/false, "reason": "short reason", "category": "violence|sexual|hate|cheating|injection|off_topic|medical|legal|safe"}
+{
+  "safe": true/false,
+  "reason": "short reason",
+  "category": "violence|sexual|hate|cheating|injection|off_topic|medical|legal|safe",
+  "route": "retrieval|direct",
+  "is_academic": true/false
+}
 """
 
 
@@ -85,22 +91,23 @@ def _quick_pattern_check(text: str) -> Dict[str, any] | None:
 
 def check_input_safety(user_input: str) -> Dict[str, any]:
     """
-    Check if user input is safe for processing.
+    Check if user input is safe for processing and determine route/academic status.
     
     Returns:
-        {"safe": bool, "reason": str, "category": str}
+        {"safe": bool, "reason": str, "category": str, "route": str, "is_academic": bool}
     """
     text = (user_input or "").strip()
     if not text:
-        return {"safe": True, "reason": "Empty input", "category": "safe"}
+        return {"safe": True, "reason": "Empty input", "category": "safe", "route": "direct", "is_academic": False}
     
     # Quick pattern check
     quick_result = _quick_pattern_check(text)
     if quick_result:
         logger.warning("[GUARDRAIL] quick reject: %s", quick_result)
+        quick_result.update({"route": "direct", "is_academic": False})
         return quick_result
     
-    # LLM-based safety check
+    # LLM-based safety + routing check
     try:
         resp = _guardrail_llm.invoke([
             {"role": "system", "content": _GUARDRAIL_PROMPT},
@@ -112,16 +119,30 @@ def check_input_safety(user_input: str) -> Dict[str, any]:
         safe = bool(data.get("safe", True))
         reason = str(data.get("reason", "LLM decision"))
         category = str(data.get("category", "unknown"))
+        route = str(data.get("route", "direct"))
+        is_academic = bool(data.get("is_academic", False))
         
         if not safe:
             logger.warning("[GUARDRAIL] LLM reject: category=%s reason=%s", category, reason)
         
-        return {"safe": safe, "reason": reason, "category": category}
+        return {
+            "safe": safe, 
+            "reason": reason, 
+            "category": category,
+            "route": route,
+            "is_academic": is_academic
+        }
     
     except Exception as exc:
         logger.warning("[GUARDRAIL] exception during check: %s", exc)
-        # Fail open: allow if guardrail fails (avoid blocking legitimate queries)
-        return {"safe": True, "reason": "Guardrail check failed, allowing", "category": "safe"}
+        # Fail open but safe defaults
+        return {
+            "safe": True, 
+            "reason": "Guardrail check failed, allowing", 
+            "category": "safe",
+            "route": "retrieval", # Default to retrieval if unsure to be helpful
+            "is_academic": True
+        }
 
 
 def check_output_safety(assistant_output: str) -> Dict[str, any]:
