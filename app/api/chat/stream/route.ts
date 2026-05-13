@@ -18,38 +18,72 @@ async function getSessionUserId() {
 }
 
 export async function POST(request: Request) {
-  try {
-    const userId = await getSessionUserId();
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const encoder = new TextEncoder();
 
+  try {
     const body = (await request.json()) as ChatStreamPayload;
-    const response = await fetch(`${getBackendApiBase()}/api/chat/stream`, {
-      method: "POST",
-      headers: backendHeaders(),
-      body: JSON.stringify({
-        ...body,
-        user_id: userId,
-      }),
-      cache: "no-store",
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (line: string) => controller.enqueue(encoder.encode(line));
+
+        try {
+          send("__STEP__:Opening secure chat session...\n");
+
+          const userId = await getSessionUserId();
+          if (!userId) {
+            send("\n[ERROR] Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
+            controller.close();
+            return;
+          }
+
+          send("__STEP__:Connecting to backend agent...\n");
+          const response = await fetch(`${getBackendApiBase()}/api/chat/stream`, {
+            method: "POST",
+            headers: backendHeaders(),
+            body: JSON.stringify({
+              ...body,
+              user_id: userId,
+            }),
+            cache: "no-store",
+          });
+
+          if (!response.ok || !response.body) {
+            const text = await response.text().catch(() => "");
+            const message = response.status >= 502
+              ? "Máy chủ AI đang quá tải hoặc mất kết nối. Vui lòng thử lại sau ít phút."
+              : text || "Chat stream failed";
+            send(`\n[ERROR] ${message}`);
+            controller.close();
+            return;
+          }
+
+          send("__STEP__:Backend stream connected...\n");
+          const reader = response.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) controller.enqueue(value);
+          }
+          controller.close();
+        } catch (error) {
+          console.error("Chat stream proxy failed", error);
+          send("\n[ERROR] Không thể kết nối tới Agent API. Vui lòng thử lại sau ít phút.");
+          controller.close();
+        }
+      },
     });
 
-    if (!response.body) {
-      const text = await response.text().catch(() => "");
-      return new NextResponse(text || "Chat stream failed", { status: response.status });
-    }
-
-    return new NextResponse(response.body, {
-      status: response.status,
+    return new NextResponse(stream, {
+      status: 200,
       headers: {
-        "Content-Type": response.headers.get("Content-Type") || "text/plain; charset=utf-8",
+        "Content-Type": "text/plain; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
       },
     });
   } catch (error) {
-    console.error("Chat stream proxy failed", error);
+    console.error("Chat stream request setup failed", error);
     return NextResponse.json({ error: "Chat stream failed" }, { status: 500 });
   }
 }
