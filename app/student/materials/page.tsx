@@ -23,6 +23,7 @@ export default function StudentMaterialsPage() {
   const [joiningClassId, setJoiningClassId] = useState("");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isClassFilesLoading, setIsClassFilesLoading] = useState(false);
+  const [classFileSearch, setClassFileSearch] = useState("");
   const [deleteMessage, setDeleteMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -173,6 +174,16 @@ export default function StudentMaterialsPage() {
     }
   };
 
+  const selectedClass = memberships.find((m) => m.class?.id === selectedClassId)?.class;
+  const visibleClassFiles = classFiles.filter((file) => {
+    const matchesClass = selectedClassId ? file.class_id === selectedClassId : true;
+    const query = classFileSearch.trim().toLowerCase();
+    const matchesSearch = !query || [file.original_filename, file.class_name]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(query));
+    return matchesClass && matchesSearch;
+  });
+
   if (status === "loading") return <MainLayout role="student"><div className="p-8">Loading...</div></MainLayout>;
 
   return (
@@ -247,8 +258,24 @@ export default function StudentMaterialsPage() {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6">
-          <h2 className="text-xl font-semibold text-slate-900">Approved Class Files</h2>
+          <div className="rounded-3xl border border-slate-200 bg-white p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">
+                {selectedClass ? `${selectedClass.name} Files` : "Approved Class Files"}
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                {selectedClass ? "Showing files from selected class." : "Select an approved class to filter files."}
+              </p>
+            </div>
+            <input
+              id="class-file-search"
+              value={classFileSearch}
+              onChange={(event) => setClassFileSearch(event.target.value)}
+              placeholder="Search files..."
+              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:bg-white focus:ring-1 focus:ring-brand-500"
+            />
+          </div>
           <div className="mt-3 space-y-2">
             {isClassFilesLoading ? (
               Array.from({ length: 3 }).map((_, idx) => (
@@ -263,7 +290,7 @@ export default function StudentMaterialsPage() {
                   <div className="h-8 w-20 rounded-xl bg-slate-100" />
                 </div>
               ))
-            ) : classFiles.map((f) => (
+            ) : visibleClassFiles.map((f) => (
               <div key={`${f.class_id || "no-class"}-${f.file_id}`} className="group flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
@@ -274,14 +301,17 @@ export default function StudentMaterialsPage() {
                     <div className="text-[11px] text-slate-500 mt-0.5 uppercase tracking-wider font-bold">Class: {f.class_name || "Unknown class"}</div>
                   </div>
                 </div>
-                <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center shrink-0">Download</a>
+                <div className="flex items-center gap-2 shrink-0">
+                  <a id={`view-class-file-${f.file_id}`} href={`/api/class-files/view?file_id=${encodeURIComponent(f.file_id)}`} target="_blank" rel="noreferrer" className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-xl transition text-center">Open</a>
+                  <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition text-center">Download</a>
+                </div>
               </div>
             ))}
-            {!isClassFilesLoading && classFiles.length === 0 ? (
+            {!isClassFilesLoading && visibleClassFiles.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-center rounded-[24px] border border-dashed border-slate-300 bg-slate-50">
                 <div className="text-4xl mb-3">📂</div>
-                <h3 className="font-bold text-slate-900 text-lg mb-1">No materials yet</h3>
-                <p className="text-sm text-slate-500 max-w-sm px-4">Join a class above to access lecture slides, practice exercises, and exam reviews.</p>
+                <h3 className="font-bold text-slate-900 text-lg mb-1">No matching materials</h3>
+                <p className="text-sm text-slate-500 max-w-sm px-4">Try another class or search term, or wait for your lecturer to upload materials.</p>
               </div>
             ) : null}
           </div>
@@ -307,12 +337,13 @@ export default function StudentMaterialsPage() {
                 <div key={f.file_id} className="group flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
                   <span className="font-bold text-slate-900 text-sm truncate">{f.filename}</span>
                   <div className="flex items-center gap-2 shrink-0">
-                    <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition opacity-0 group-hover:opacity-100">Download</a>
+                    <a id={`view-personal-file-${f.file_id}`} href={`/api/uploads/view?file_id=${encodeURIComponent(f.file_id)}`} target="_blank" rel="noreferrer" className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg transition">Open</a>
+                    <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition">Download</a>
                     <button
                       id={`delete-personal-file-${f.file_id}`}
                       onClick={() => deletePersonalUpload(f.file_id, f.filename)}
                       disabled={Boolean(deletingFileId)}
-                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition ${busy ? "bg-rose-100 text-rose-500 cursor-not-allowed opacity-100" : "bg-rose-50 text-rose-700 hover:bg-rose-100 opacity-0 group-hover:opacity-100"}`}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition ${busy ? "bg-rose-100 text-rose-500 cursor-not-allowed" : "bg-rose-50 text-rose-700 hover:bg-rose-100"}`}
                     >
                       {busy ? "Deleting..." : "Delete"}
                     </button>

@@ -254,11 +254,12 @@ export default function StudentChat() {
     }
   }, [status, session, chatSessionId]);
 
-  // Shared send handler (used by both form submit and Enter key)
-  const send = async () => {
-    if (!draft.trim() || isSending) return;
+  // Shared send handler (used by form submit, Enter key, and suggested prompts)
+  const send = async (overrideMessage?: string) => {
+    const messageToSend = (overrideMessage ?? draft).trim();
+    if (!messageToSend || isSending) return;
 
-    const userMessage = draft.trim();
+    const userMessage = messageToSend;
     const tagSuffix = preferredSources.length
       ? `\n\n[Tagged files: ${preferredSources.join(", ")}]`
       : "";
@@ -733,10 +734,10 @@ export default function StudentChat() {
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2 shrink-0">
-            <button onClick={() => { setDraft("Explain supervised learning"); setTimeout(send, 0); }} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Explain supervised learning</button>
-            <button onClick={() => { setDraft("Quiz me on clustering"); setTimeout(send, 0); }} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Quiz me on clustering</button>
-            <button onClick={() => { setDraft("Summarize uploaded files"); setTimeout(send, 0); }} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Summarize uploaded files</button>
-            <button onClick={() => { setDraft("Generate exam questions"); setTimeout(send, 0); }} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Generate exam questions</button>
+            <button type="button" onClick={() => send("Explain supervised learning")} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Explain supervised learning</button>
+            <button type="button" onClick={() => send("Quiz me on clustering")} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Quiz me on clustering</button>
+            <button type="button" onClick={() => send("Summarize uploaded files")} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Summarize uploaded files</button>
+            <button type="button" onClick={() => send("Generate exam questions")} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-100 transition shadow-[0_2px_8px_rgba(15,23,42,0.04)]">✨ Generate exam questions</button>
           </div>
 
           <form

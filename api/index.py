@@ -85,7 +85,13 @@ async def legacy_download_class_file(
 
 
 @app.get("/api/memory/debug")
-def memory_debug(user_id: str = "", session_id: str = "web_session", query: str = "", top_k: int = 5):
+def memory_debug(
+    user_id: str = "",
+    session_id: str = "web_session",
+    query: str = "",
+    top_k: int = 5,
+    _internal_auth: None = Depends(verify_internal_request),
+):
     if not user_id:
         raise HTTPException(status_code=401, detail="Missing user_id")
 
@@ -115,7 +121,7 @@ def memory_debug(user_id: str = "", session_id: str = "web_session", query: str 
 
 
 @app.get("/api/perf/cache-stats")
-def perf_cache_stats():
+def perf_cache_stats(_internal_auth: None = Depends(verify_internal_request)):
     return {"ok": True, "cache": _supabase_cache_stats()}
 
 

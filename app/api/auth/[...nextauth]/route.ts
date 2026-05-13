@@ -7,18 +7,39 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 async function isRegisteredAndOnboarded(email?: string | null) {
   if (!email || !supabaseUrl || !supabaseServiceRoleKey) return false;
 
-  const url = `${supabaseUrl}/rest/v1/users?email=eq.${encodeURIComponent(email)}&select=id,onboarded&limit=1`;
-  const response = await fetch(url, {
-    headers: {
-      apikey: supabaseServiceRoleKey,
-      Authorization: `Bearer ${supabaseServiceRoleKey}`,
-    },
-    cache: "no-store",
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-  if (!response.ok) return false;
-  const rows = (await response.json()) as Array<{ onboarded?: boolean }>;
-  return !!rows[0]?.onboarded;
+  try {
+    const url = `${supabaseUrl}/rest/v1/users?email=eq.${encodeURIComponent(email)}&select=id,onboarded&limit=1`;
+    const response = await fetch(url, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      console.error("NextAuth onboarding check failed", {
+        status: response.status,
+        email,
+      });
+      return false;
+    }
+
+    const rows = (await response.json()) as Array<{ onboarded?: boolean }>;
+    return !!rows[0]?.onboarded;
+  } catch (error) {
+    console.error("NextAuth onboarding check error", {
+      email,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export const authOptions: NextAuthOptions = {

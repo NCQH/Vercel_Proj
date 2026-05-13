@@ -197,7 +197,8 @@ export default function LecturerMaterialsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center">Download</a>
+                  <a id={`view-class-file-${f.file_id}`} href={`/api/class-files/view?file_id=${encodeURIComponent(f.file_id)}`} target="_blank" rel="noreferrer" className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-xl transition text-center">Open</a>
+                  <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition text-center">Download</a>
                   <button
                     id={`delete-class-file-${f.file_id}`}
                     onClick={() => deleteClassFile(f.file_id, f.original_filename)}

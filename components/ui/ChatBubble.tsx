@@ -168,16 +168,45 @@ export default function ChatBubble({
       </div>
       {citations.length > 0 && !isThinking ? (
         <div className="mt-4 flex flex-wrap gap-2 border-t border-white/10 pt-3">
-          {citations.map((citation) => (
-            <span
-              key={citation}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold text-slate-100"
-              title={citation}
-            >
-              <FileText className="h-3.5 w-3.5" />
-              {citation}
-            </span>
-          ))}
+          {citations.map((citation) => {
+            const fileIdMatch = citation.match(/(?:file_id|fileId|id)[:=]\s*([A-Za-z0-9_-]+)/i);
+            const sourceTypeMatch = citation.match(/(?:source_type|sourceType|type)[:=]\s*([A-Za-z_]+)/i);
+            const sourceType = sourceTypeMatch?.[1]?.toLowerCase() || "class_file";
+            const viewBase = sourceType.includes("personal") || sourceType.includes("upload")
+              ? "/api/uploads/view"
+              : "/api/class-files/view";
+            const href = fileIdMatch?.[1]
+              ? `${viewBase}?file_id=${encodeURIComponent(fileIdMatch[1])}`
+              : "";
+            const className = "inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold text-slate-100 transition hover:border-cyan-300/70 hover:bg-cyan-400/10 hover:text-cyan-100";
+
+            if (href) {
+              return (
+                <a
+                  key={citation}
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={className}
+                  title={`Open ${citation}`}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  {citation}
+                </a>
+              );
+            }
+
+            return (
+              <span
+                key={citation}
+                className={className}
+                title={citation}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                {citation}
+              </span>
+            );
+          })}
         </div>
       ) : null}
     </div>
