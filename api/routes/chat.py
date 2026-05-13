@@ -258,7 +258,8 @@ async def chat_stream(request: ChatRequest):
 
     async def event_generator():
         req_start = time.perf_counter()
-        yield (" " * 2048) + "\n"
+        yield "__STEP__:Connecting to agent...\n"
+        yield "__STEP__:Preparing your question...\n"
 
         try:
             safe_user = _safe_user_id(request.user_id)
@@ -349,4 +350,12 @@ async def chat_stream(request: ChatRequest):
             logger.exception("[CHAT][%s] Chat stream error total_ms=%.2f", rid, _elapsed_ms(req_start))
             yield "\n[ERROR] Agent encountered an internal error."
 
-    return StreamingResponse(event_generator(), media_type="text/plain; charset=utf-8")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

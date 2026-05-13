@@ -19,6 +19,15 @@ export class ApiError extends Error {
   }
 }
 
+function friendlyApiError(status: number, fallback: string) {
+  if (status === 413) return "File quá lớn. Vui lòng chọn file nhỏ hơn giới hạn cho phép.";
+  if (status === 415 || status === 400) return fallback || "File không hợp lệ hoặc định dạng chưa được hỗ trợ.";
+  if (status === 502 || status === 503 || status === 504) return "Máy chủ AI đang quá tải hoặc mất kết nối. Vui lòng thử lại sau ít phút.";
+  if (status === 401) return "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.";
+  if (status === 403) return "Bạn không có quyền thực hiện thao tác này.";
+  return fallback || `Yêu cầu thất bại (mã ${status}). Vui lòng thử lại.`;
+}
+
 const internalAuthHeaders = (): Record<string, string> => ({});
 
 export type UserRole = "student" | "lecturer" | "public";
@@ -133,7 +142,7 @@ async function request<T>(
     } catch (e) {
       // Not JSON
     }
-    throw new ApiError(errorMessage, response.status);
+    throw new ApiError(friendlyApiError(response.status, errorMessage), response.status);
   }
 
   return response.json() as Promise<T>;
@@ -160,7 +169,7 @@ async function formRequest<T>(url: string, formData: FormData): Promise<T> {
     } catch (e) {
       // Not JSON
     }
-    throw new ApiError(errorMessage, response.status);
+    throw new ApiError(friendlyApiError(response.status, errorMessage), response.status);
   }
 
   return response.json() as Promise<T>;

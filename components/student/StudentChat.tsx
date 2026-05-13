@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Paperclip, Send } from "lucide-react";
-import { apiClient, type ChatSessionItem, type ClassMembership, type RoadmapPriority } from "../../lib/api-client";
+import { apiClient, ApiError, type ChatSessionItem, type ClassMembership, type RoadmapPriority } from "../../lib/api-client";
 import ChatBubble from "../ui/ChatBubble";
 import MainLayout from "../app-shell/MainLayout";
 import { useToast } from "../ui/ToastProvider";
@@ -521,6 +521,11 @@ export default function StudentChat() {
         });
       }
     } catch (error) {
+      const errorMessage = error instanceof DOMException && error.name === "AbortError"
+        ? "Agent phản hồi quá lâu. Vui lòng thử lại hoặc hỏi ngắn hơn."
+        : error instanceof ApiError
+          ? error.message
+          : "Không thể kết nối tới Agent API. Vui lòng thử lại sau ít phút.";
       console.error(error);
       setMessages((current) => {
         const next = [...current];
@@ -531,7 +536,7 @@ export default function StudentChat() {
         if (lastAssistantIndex === undefined) return current;
         next[lastAssistantIndex] = {
           ...next[lastAssistantIndex],
-          text: "Connection error to Agent API. Please try again.",
+          text: errorMessage,
         };
         return next;
       });
@@ -644,12 +649,15 @@ export default function StudentChat() {
         });
       }
     } catch (error) {
+      const errorMessage = error instanceof ApiError
+        ? error.message
+        : "Không thể tải file lên. Vui lòng thử lại.";
       setMessages((current) =>
         current.map((msg) =>
           msg.id === tempId
             ? {
               ...msg,
-              text: `❌ File upload failed for ${file.name}. Please try again.`,
+              text: `❌ Không thể upload ${file.name}. ${errorMessage}`,
             }
             : msg
         )
@@ -657,7 +665,7 @@ export default function StudentChat() {
       showToast({
         type: "error",
         title: "Upload failed",
-        message: `Could not upload ${file.name}. Please try again.`,
+        message: errorMessage,
       });
     } finally {
       setIsUploading(false);
