@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
+from api.lib.document_ingest import SUPPORTED_DOCUMENT_EXTENSIONS, extract_documents_from_file
 from api.lib.supabase import (
     _supabase_headers,
     _encode_eq,
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Lightweight in-memory cache for hot endpoint /api/classes/files/user
 USER_CLASS_FILES_CACHE_TTL_SECONDS = 20
 MAX_CLASS_FILE_BYTES = 20 * 1024 * 1024
-ALLOWED_CLASS_FILE_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+ALLOWED_CLASS_FILE_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 _user_class_files_cache: dict[str, dict] = {}
 
 def _safe_filename(raw: str) -> str:
@@ -481,9 +481,11 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
             tmp_path = tmp_file.name
         
         try:
-            if ext == ".pdf": docs = PyMuPDFLoader(tmp_path).load()
-            elif ext == ".docx": docs = Docx2txtLoader(tmp_path).load()
-            elif ext in {".txt", ".md"}: docs = TextLoader(tmp_path, encoding="utf-8").load()
+            docs = extract_documents_from_file(
+                tmp_path,
+                safe_name,
+                {"class_id": class_id, "stored_path": storage_path, "file_id": file_id},
+            )
         finally:
             try: os.unlink(tmp_path)
             except Exception: pass

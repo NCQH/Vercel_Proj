@@ -43,7 +43,7 @@ const initialMessages: Message[] = [
 
 const createSessionId = () => `web_session_${Date.now()}`;
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
-const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "txt", "md", "doc", "docx"]);
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "txt", "md", "doc", "docx", "pptx", "xlsx", "xls"]);
 
 type RoadmapItemPreview = {
   id: string;
@@ -555,7 +555,7 @@ export default function StudentChat() {
       showToast({
         type: "warning",
         title: "Unsupported file type",
-        message: "Please upload PDF, DOC, DOCX, TXT, or MD files.",
+        message: "Please upload PDF, DOC, DOCX, PPTX, XLS, XLSX, TXT, or MD files.",
       });
       event.target.value = "";
       return;

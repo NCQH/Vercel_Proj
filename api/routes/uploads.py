@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
+from api.lib.document_ingest import SUPPORTED_DOCUMENT_EXTENSIONS, extract_documents_from_file
 
 from api.lib.supabase import (
     _supabase_headers,
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/uploads", dependencies=[Depends(verify_internal_
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+ALLOWED_UPLOAD_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 
 def _safe_filename(raw: str) -> str:
     name = Path(raw or "upload.bin").name
@@ -150,9 +150,11 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
             tmp_path = tmp_file.name
         
         try:
-            if ext == ".pdf": docs = PyMuPDFLoader(tmp_path).load()
-            elif ext == ".docx": docs = Docx2txtLoader(tmp_path).load()
-            elif ext in {".txt", ".md"}: docs = TextLoader(tmp_path, encoding="utf-8").load()
+            docs = extract_documents_from_file(
+                tmp_path,
+                safe_name,
+                {"user_id": safe_user, "stored_path": storage_path, "file_id": file_id},
+            )
         finally:
             try: os.unlink(tmp_path)
             except Exception: pass
@@ -161,7 +163,7 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
             splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
             chunks = splitter.split_documents(docs)
             for chunk in chunks:
-                chunk.metadata = {**(chunk.metadata or {}), "user_id": safe_user, "source": safe_name, "stored_path": storage_path}
+                chunk.metadata = {**(chunk.metadata or {}), "user_id": safe_user, "source": safe_name, "stored_path": storage_path, "file_id": file_id}
             add_documents(get_vectorstore(user_id=safe_user), chunks)
     except Exception:
         logger.exception("RAG ingest failed")

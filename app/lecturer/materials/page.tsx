@@ -10,7 +10,7 @@ type ClassItem = Required<Pick<ClassSummary, "id" | "name" | "code">> & Pick<Cla
 type PendingItem = ClassMembership & { id: string; class_id: string; student_id: string; status: string; requested_at: string };
 
 const MAX_CLASS_FILE_BYTES = 25 * 1024 * 1024;
-const ALLOWED_CLASS_FILE_EXTENSIONS = new Set(["pdf", "txt", "md", "doc", "docx"]);
+const ALLOWED_CLASS_FILE_EXTENSIONS = new Set(["pdf", "txt", "md", "doc", "docx", "pptx", "xlsx", "xls"]);
 
 export default function LecturerMaterialsPage() {
   const { data: session } = useSession();
@@ -96,7 +96,7 @@ export default function LecturerMaterialsPage() {
 
     const extension = file.name.split(".").pop()?.toLowerCase() || "";
     if (!ALLOWED_CLASS_FILE_EXTENSIONS.has(extension)) {
-      const message = "Please upload PDF, DOC, DOCX, TXT, or MD files.";
+      const message = "Please upload PDF, DOC, DOCX, PPTX, XLS, XLSX, TXT, or MD files.";
       setFileActionMessage(message);
       showToast({ type: "warning", title: "Unsupported file type", message });
       e.target.value = "";
@@ -211,7 +211,7 @@ export default function LecturerMaterialsPage() {
              <h2 className="font-bold text-lg text-slate-900">Class Files</h2>
              <button id="upload-class-file-btn" onClick={() => fileRef.current?.click()} className="rounded-xl bg-slate-900 hover:bg-slate-800 px-5 py-2.5 text-sm font-bold text-white transition shadow-sm">Upload Material</button>
           </div>
-          <input ref={fileRef} type="file" accept=".pdf,.txt,.md,.doc,.docx" className="hidden" onChange={uploadClassFile} />
+          <input ref={fileRef} type="file" accept=".pdf,.txt,.md,.doc,.docx,.pptx,.xlsx,.xls" className="hidden" onChange={uploadClassFile} />
           {fileActionMessage ? (
             <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
               {fileActionMessage}

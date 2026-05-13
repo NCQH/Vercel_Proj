@@ -19,3 +19,4 @@ rank_bm25
 numpy
 python-multipart
 docx2txt
+markitdown[pdf,docx,pptx,xlsx,xls]
