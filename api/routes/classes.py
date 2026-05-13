@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Lightweight in-memory cache for hot endpoint /api/classes/files/user
 USER_CLASS_FILES_CACHE_TTL_SECONDS = 20
 MAX_CLASS_FILE_BYTES = 20 * 1024 * 1024
+MAX_INGEST_CHUNKS = int(os.getenv("MAX_INGEST_CHUNKS", "350"))
 ALLOWED_CLASS_FILE_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 _user_class_files_cache: dict[str, dict] = {}
 
@@ -492,7 +493,8 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
         
         if docs:
             splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
-            chunks = splitter.split_documents(docs)
+            chunks = splitter.split_documents(docs)[:MAX_INGEST_CHUNKS]
+            logger.info("Indexing %d chunk(s) for class file %s", len(chunks), safe_name)
             for chunk in chunks:
                 chunk.metadata = {
                     **(chunk.metadata or {}),

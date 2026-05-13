@@ -25,6 +25,7 @@ router = APIRouter(prefix="/api/uploads", dependencies=[Depends(verify_internal_
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_INGEST_CHUNKS = int(os.getenv("MAX_INGEST_CHUNKS", "350"))
 ALLOWED_UPLOAD_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 
 def _safe_filename(raw: str) -> str:
@@ -161,7 +162,8 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
 
         if docs:
             splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
-            chunks = splitter.split_documents(docs)
+            chunks = splitter.split_documents(docs)[:MAX_INGEST_CHUNKS]
+            logger.info("Indexing %d chunk(s) for upload %s", len(chunks), safe_name)
             for chunk in chunks:
                 chunk.metadata = {**(chunk.metadata or {}), "user_id": safe_user, "source": safe_name, "stored_path": storage_path, "file_id": file_id}
             add_documents(get_vectorstore(user_id=safe_user), chunks)
