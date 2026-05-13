@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/uploads", dependencies=[Depends(verify_internal_
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-MAX_INGEST_CHUNKS = int(os.getenv("MAX_INGEST_CHUNKS", "350"))
+MAX_INGEST_CHUNKS = int(os.getenv("MAX_INGEST_CHUNKS", "80"))
 ALLOWED_UPLOAD_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 
 def _safe_filename(raw: str) -> str:

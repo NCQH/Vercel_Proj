@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Lightweight in-memory cache for hot endpoint /api/classes/files/user
 USER_CLASS_FILES_CACHE_TTL_SECONDS = 20
 MAX_CLASS_FILE_BYTES = 20 * 1024 * 1024
-MAX_INGEST_CHUNKS = int(os.getenv("MAX_INGEST_CHUNKS", "350"))
+MAX_INGEST_CHUNKS = int(os.getenv("MAX_INGEST_CHUNKS", "80"))
 ALLOWED_CLASS_FILE_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 _user_class_files_cache: dict[str, dict] = {}
 
