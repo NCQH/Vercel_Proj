@@ -3,18 +3,8 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import MainLayout from "../../../components/app-shell/MainLayout";
+import { apiClient, type RoadmapItem, type RoadmapStatus } from "../../../lib/api-client";
 
-type RoadmapItem = {
-  id: string;
-  topic: string;
-  description: string;
-  priority: "high" | "medium" | "low";
-  eta_minutes: number;
-  progress: number;
-  status: "todo" | "doing" | "done";
-  sources: string[];
-  actions: string[];
-};
 
 export default function StudentRoadmapPage() {
   const { data: session, status } = useSession();
@@ -33,8 +23,7 @@ export default function StudentRoadmapPage() {
     if (!identity) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/roadmap?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" });
-      const data = await res.json();
+      const data = await apiClient.roadmap.get();
       setItems(data.items || []);
       setNextAction(data.next_action || null);
     } finally {
@@ -52,12 +41,7 @@ export default function StudentRoadmapPage() {
     if (!identity) return;
     setRefreshing(true);
     try {
-      const res = await fetch("/api/roadmap/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: identity }),
-      });
-      const data = await res.json();
+      const data = await apiClient.roadmap.refresh();
       setItems(data.items || []);
       setNextAction(data.next_action || null);
     } finally {
@@ -65,14 +49,10 @@ export default function StudentRoadmapPage() {
     }
   };
 
-  const updateItem = async (item: RoadmapItem, nextStatus: "todo" | "doing" | "done") => {
+  const updateItem = async (item: RoadmapItem, nextStatus: RoadmapStatus) => {
     if (!identity) return;
     const nextProgress = nextStatus === "done" ? 100 : nextStatus === "doing" ? Math.max(item.progress, 40) : Math.min(item.progress, 20);
-    await fetch(`/api/roadmap/items/${encodeURIComponent(item.id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: identity, status: nextStatus, progress: nextProgress }),
-    });
+    await apiClient.roadmap.updateItem(item.id, { status: nextStatus, progress: nextProgress });
     await loadRoadmap();
   };
 

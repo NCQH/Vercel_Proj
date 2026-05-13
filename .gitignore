@@ -31,7 +31,10 @@ WORKLOG_template.md
 .gemini/
 .github/
 
-scripts/
-.gitignore
 chroma_db/
 memory_db/
+data/
+
+# Backup files
+*.backup
+*.bak

@@ -5,7 +5,7 @@ import time
 import httpx
 import tempfile
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
 from api.lib.supabase import (
@@ -15,15 +15,23 @@ from api.lib.supabase import (
     SUPABASE_URL
 )
 from api.lib.storage import storage_client, CLASS_FILES_BUCKET
+from api.lib.internal_auth import verify_internal_request
 import re
 from datetime import datetime, timezone
 
-router = APIRouter(prefix="/api/classes")
+router = APIRouter(prefix="/api/classes", dependencies=[Depends(verify_internal_request)])
 logger = logging.getLogger(__name__)
 
 # Lightweight in-memory cache for hot endpoint /api/classes/files/user
 USER_CLASS_FILES_CACHE_TTL_SECONDS = 20
+MAX_CLASS_FILE_BYTES = 20 * 1024 * 1024
+ALLOWED_CLASS_FILE_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 _user_class_files_cache: dict[str, dict] = {}
+
+def _safe_filename(raw: str) -> str:
+    name = Path(raw or "document").name
+    name = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip(" .")
+    return name[:120] or "document"
 
 def _get_cached_user_class_files(user_id: str):
     cached = _user_class_files_cache.get(user_id)
@@ -49,7 +57,8 @@ def _create_class(lecturer_id: str, name: str, description: str = "") -> dict:
     with httpx.Client(timeout=15.0) as client:
         response = client.post(f"{SUPABASE_URL}/rest/v1/classes", headers=headers, json=payload)
     if response.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to create class: {response.text}")
+        logger.error("Failed to create class: status=%s body=%s", response.status_code, response.text)
+        raise HTTPException(status_code=500, detail="Failed to create class")
     rows = response.json()
     return rows[0] if rows else payload
 
@@ -59,7 +68,8 @@ def _list_classes_for_lecturer(lecturer_id: str) -> list[dict]:
     with httpx.Client(timeout=15.0) as client:
         response = client.get(url, headers=headers)
     if response.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to list lecturer classes: {response.text}")
+        logger.error("Failed to list lecturer classes: status=%s body=%s", response.status_code, response.text)
+        raise HTTPException(status_code=500, detail="Failed to list lecturer classes")
     return response.json()
 
 def _list_classes_for_student(student_id: str) -> list[dict]:
@@ -68,7 +78,8 @@ def _list_classes_for_student(student_id: str) -> list[dict]:
     with httpx.Client(timeout=15.0) as client:
         response = client.get(url, headers=headers)
     if response.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to list student classes: {response.text}")
+        logger.error("Failed to list student classes: status=%s body=%s", response.status_code, response.text)
+        raise HTTPException(status_code=500, detail="Failed to list student classes")
     rows = response.json()
     out = []
     for row in rows:
@@ -82,7 +93,8 @@ def _list_public_classes() -> list[dict]:
     with httpx.Client(timeout=15.0) as client:
         response = client.get(url, headers=headers)
     if response.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to list public classes: {response.text}")
+        logger.error("Failed to list public classes: status=%s body=%s", response.status_code, response.text)
+        raise HTTPException(status_code=500, detail="Failed to list public classes")
     return response.json()
 
 def _list_pending_requests_for_lecturer(lecturer_id: str, class_id: str = "") -> list[dict]:
@@ -117,7 +129,8 @@ def _list_all_members_for_class(lecturer_id: str, class_id: str) -> list[dict]:
     with httpx.Client(timeout=15.0) as client:
         resp = client.get(url, headers=headers)
     if resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to list class members: {resp.text}")
+        logger.error("Failed to list class members: status=%s body=%s", resp.status_code, resp.text)
+        raise HTTPException(status_code=500, detail="Failed to list class members")
     
     members = resp.json()
     if not members:
@@ -227,7 +240,7 @@ def _request_to_join_class(student_id: str, code: str) -> dict:
     
     if join_resp.status_code >= 300:
         logger.error(f"Failed to request join: status={join_resp.status_code} body={join_resp.text}")
-        raise HTTPException(status_code=500, detail=f"Failed to request join: {join_resp.text}")
+        raise HTTPException(status_code=500, detail="Failed to request join")
     
     result = join_resp.json()
     if not result:
@@ -435,16 +448,29 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
     safe_user = _safe_user_id(user_id)
     _ensure_lecturer_class_owner(safe_user, class_id)
     
-    content = await file.read()
-    file_id = str(uuid.uuid4())
-    storage_path = f"classes/{class_id}/{file_id}_{file.filename}"
-    storage_client.upload_file(bucket=CLASS_FILES_BUCKET, path=storage_path, file_data=content)
+    safe_name = _safe_filename(file.filename or "document")
+    ext = Path(safe_name).suffix.lower()
+    if ext not in ALLOWED_CLASS_FILE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
     
-    item = _save_class_file_metadata(safe_user, class_id, file_id, file.filename, storage_path, len(content))
+    content = await file.read(MAX_CLASS_FILE_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > MAX_CLASS_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 20MB)")
+
+    file_id = str(uuid.uuid4())
+    storage_path = f"classes/{class_id}/{file_id}_{safe_name}"
+    try:
+        storage_client.upload_file(bucket=CLASS_FILES_BUCKET, path=storage_path, file_data=content)
+    except Exception:
+        logger.exception("Failed to upload class file to storage")
+        raise HTTPException(status_code=500, detail="Failed to upload file")
+    
+    item = _save_class_file_metadata(safe_user, class_id, file_id, safe_name, storage_path, len(content))
     
     # Ingest file into ChromaDB for RAG
     try:
-        ext = Path(file.filename).suffix.lower()
         docs = []
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
             tmp_file.write(content)
@@ -465,7 +491,7 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
                 chunk.metadata = {
                     **(chunk.metadata or {}),
                     "class_id": class_id,
-                    "source": file.filename,
+                    "source": safe_name,
                     "stored_path": storage_path,
                     "file_id": file_id
                 }
@@ -523,8 +549,9 @@ def download_class_file_route(file_id: str = "", user_id: str = ""):
     
     if not can_access: raise HTTPException(status_code=403, detail="Access denied")
     
+    download_name = _safe_filename(item.get("original_filename") or "download.bin")
     content = storage_client.download_file(bucket=CLASS_FILES_BUCKET, path=item.get("stored_path"))
-    return Response(content=content, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{item.get("original_filename") or "download.bin"}"'})
+    return Response(content=content, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{download_name}"'})
 
 @router.delete("/{class_id}")
 def delete_class(class_id: str, user_id: str = ""):
@@ -542,7 +569,8 @@ def delete_class(class_id: str, user_id: str = ""):
         resp = client.delete(url, headers=headers)
     
     if resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to delete class: {resp.text}")
+        logger.error("Failed to delete class: status=%s body=%s", resp.status_code, resp.text)
+        raise HTTPException(status_code=500, detail="Failed to delete class")
     
     logger.info(f"Deleted class {class_id} by lecturer {safe_user}")
     return {"ok": True, "class_id": class_id, "message": "Class deleted successfully"}
@@ -581,7 +609,8 @@ def update_class(
         resp = client.patch(url, headers=headers, json=payload)
     
     if resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to update class: {resp.text}")
+        logger.error("Failed to update class: status=%s body=%s", resp.status_code, resp.text)
+        raise HTTPException(status_code=500, detail="Failed to update class")
     
     rows = resp.json()
     logger.info(f"Updated class {class_id} by lecturer {safe_user}: {payload}")

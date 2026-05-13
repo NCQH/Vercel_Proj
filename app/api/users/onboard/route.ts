@@ -38,8 +38,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, profile });
   } catch (error) {
+    console.error("Failed to onboard user", error);
     return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "Unknown error" },
+      { ok: false, error: "Failed to save user profile" },
       { status: 500 }
     );
   }

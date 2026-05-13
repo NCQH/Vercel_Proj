@@ -4,22 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import MainLayout from "../../../components/app-shell/MainLayout";
+import { apiClient, ApiError, type ClassFile, type ClassMembership, type ClassSummary, type UploadItem } from "../../../lib/api-client";
 
-type PublicClass = { id: string; name: string; code: string; description?: string };
-type MembershipItem = {
-  membership_id: string;
-  status: "pending" | "approved" | "rejected";
-  class?: { id: string; name: string; code: string; description?: string };
-};
-type ClassFile = {
-  file_id: string;
-  original_filename: string;
-  uploaded_at: string;
-  size_bytes: number;
-  class_id?: string;
-  class_name?: string;
-};
-type PersonalUpload = { file_id: string; filename: string; uploaded_at: string; size: number };
+type PublicClass = Required<Pick<ClassSummary, "id" | "name" | "code">> & Pick<ClassSummary, "description">;
+type MembershipItem = Required<Pick<ClassMembership, "membership_id" | "status">> & { class?: PublicClass };
+type PersonalUpload = UploadItem & { filename: string };
 
 export default function StudentMaterialsPage() {
   const { data: session, status } = useSession();
@@ -49,16 +38,13 @@ export default function StudentMaterialsPage() {
 
   const loadPublicClasses = async () => {
     if (!identity) return;
-    const res = await fetch(`/api/classes/public?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" });
-    const data = await res.json();
-    console.log("[DEBUG] Public classes loaded:", data.items);
-    setPublicClasses(data.items || []);
+    const data = await apiClient.classes.listPublic();
+    setPublicClasses((data.items || []) as PublicClass[]);
   };
 
   const loadMemberships = async () => {
     if (!identity) return [] as MembershipItem[];
-    const res = await fetch(`/api/classes?user_id=${encodeURIComponent(identity)}&role=student`, { cache: "no-store" });
-    const data = await res.json();
+    const data = await apiClient.classes.list("student");
     const items = (data.items || []) as MembershipItem[];
     setMemberships(items);
     const approved = items.find((m: MembershipItem) => m.status === "approved" && m.class?.id);
@@ -75,12 +61,7 @@ export default function StudentMaterialsPage() {
 
     setIsClassFilesLoading(true);
     try {
-      const res = await fetch(`/api/classes/files/user?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" });
-      if (!res.ok) {
-        return;
-      }
-
-      const data = await res.json();
+      const data = await apiClient.classes.listApprovedFiles();
       setClassFiles((data.items || []) as ClassFile[]);
     } finally {
       setIsClassFilesLoading(false);
@@ -89,13 +70,12 @@ export default function StudentMaterialsPage() {
 
   const loadPersonalUploads = async () => {
     if (!identity) return;
-    const res = await fetch(`/api/uploads?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" });
-    if (!res.ok) {
+    try {
+      const data = await apiClient.uploads.list();
+      setPersonalUploads((data.items || []) as PersonalUpload[]);
+    } catch {
       setPersonalUploads([]);
-      return;
     }
-    const data = await res.json();
-    setPersonalUploads(data.items || []);
   };
 
   useEffect(() => {
@@ -162,24 +142,14 @@ export default function StudentMaterialsPage() {
       ];
     });
 
-    const fd = new FormData();
-    fd.append("user_id", identity);
-    fd.append("class_code", code);
 
     try {
-      const res = await fetch("/api/classes/join", { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setMemberships((prev) => prev.filter((m) => m.membership_id !== optimisticMembershipId));
-        const errorMsg = data?.detail || "Join request failed. Please try again.";
-        setError(errorMsg);
-        return;
-      }
+      await apiClient.classes.join(code);
       await loadMemberships();
       await loadApprovedClassFiles();
-    } catch {
+    } catch (err) {
       setMemberships((prev) => prev.filter((m) => m.membership_id !== optimisticMembershipId));
-      setError("Network error. Please check your connection and try again.");
+      setError(err instanceof ApiError ? err.message : "Network error. Please check your connection and try again.");
     } finally {
       setJoiningClassId("");
     }
@@ -187,24 +157,17 @@ export default function StudentMaterialsPage() {
 
   const deletePersonalUpload = async (fileId: string, filename: string) => {
     if (!identity || !fileId || deletingFileId) return;
-    const confirmed = window.confirm(`Delete "${filename}"?\n\nFile will be removed from your uploads and AI retrieval context.`);
+    const confirmed = window.confirm(`Delete \"${filename}\"?\n\nFile will be removed from your uploads and AI retrieval context.`);
     if (!confirmed) return;
 
     setDeleteMessage("");
     setDeletingFileId(fileId);
     try {
-      const res = await fetch(`/api/uploads/${encodeURIComponent(fileId)}?user_id=${encodeURIComponent(identity)}`, {
-        method: "DELETE",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setDeleteMessage(data?.detail || "Delete failed. Please try again.");
-        return;
-      }
+      await apiClient.uploads.delete(fileId);
       setDeleteMessage(`Deleted ${filename}. AI will no longer retrieve this file.`);
       await loadPersonalUploads();
-    } catch {
-      setDeleteMessage("Delete failed due to network error.");
+    } catch (err) {
+      setDeleteMessage(err instanceof ApiError ? err.message : "Delete failed due to network error.");
     } finally {
       setDeletingFileId("");
     }
@@ -311,7 +274,7 @@ export default function StudentMaterialsPage() {
                     <div className="text-[11px] text-slate-500 mt-0.5 uppercase tracking-wider font-bold">Class: {f.class_name || "Unknown class"}</div>
                   </div>
                 </div>
-                <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center shrink-0">Download</a>
+                <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center shrink-0">Download</a>
               </div>
             ))}
             {!isClassFilesLoading && classFiles.length === 0 ? (
@@ -344,7 +307,7 @@ export default function StudentMaterialsPage() {
                 <div key={f.file_id} className="group flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
                   <span className="font-bold text-slate-900 text-sm truncate">{f.filename}</span>
                   <div className="flex items-center gap-2 shrink-0">
-                    <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition opacity-0 group-hover:opacity-100">Download</a>
+                    <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition opacity-0 group-hover:opacity-100">Download</a>
                     <button
                       id={`delete-personal-file-${f.file_id}`}
                       onClick={() => deletePersonalUpload(f.file_id, f.filename)}

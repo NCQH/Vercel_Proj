@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from langchain_openai import ChatOpenAI
 
 from api.models.schemas import RoadmapRefreshRequest, RoadmapItemUpdateRequest
@@ -15,8 +15,8 @@ from api.lib.supabase import (
     _get_allowed_sources,
     SUPABASE_URL
 )
-
-router = APIRouter(prefix="/api/roadmap")
+from api.lib.internal_auth import verify_internal_request
+router = APIRouter(prefix="/api/roadmap", dependencies=[Depends(verify_internal_request)])
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -102,7 +102,8 @@ def _save_roadmap_plan(user_id: str, mode: str, items: list[dict]) -> dict:
     with httpx.Client(timeout=15.0) as client:
         plan_resp = client.post(f"{SUPABASE_URL}/rest/v1/roadmap_plans", headers=headers, json=plan_payload)
     if plan_resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to save roadmap plan: {plan_resp.text}")
+        logger.error("Failed to save roadmap plan: status=%s body=%s", plan_resp.status_code, plan_resp.text)
+        raise HTTPException(status_code=500, detail="Failed to save roadmap plan")
 
     plan_rows = plan_resp.json()
     if not plan_rows:
@@ -130,7 +131,8 @@ def _save_roadmap_plan(user_id: str, mode: str, items: list[dict]) -> dict:
     with httpx.Client(timeout=15.0) as client:
         items_resp = client.post(f"{SUPABASE_URL}/rest/v1/roadmap_items", headers=item_headers, json=item_payloads)
     if items_resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to save roadmap items: {items_resp.text}")
+        logger.error("Failed to save roadmap items: status=%s body=%s", items_resp.status_code, items_resp.text)
+        raise HTTPException(status_code=500, detail="Failed to save roadmap items")
 
     saved_items_rows = items_resp.json()
     saved_items = []
@@ -163,7 +165,8 @@ def _load_latest_roadmap_plan(user_id: str) -> dict | None:
     with httpx.Client(timeout=15.0) as client:
         plan_resp = client.get(plan_url, headers=headers)
     if plan_resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to load roadmap plan: {plan_resp.text}")
+        logger.error("Failed to load roadmap plan: status=%s body=%s", plan_resp.status_code, plan_resp.text)
+        raise HTTPException(status_code=500, detail="Failed to load roadmap plan")
     plan_rows = plan_resp.json()
     if not plan_rows:
         return None
@@ -179,7 +182,8 @@ def _load_latest_roadmap_plan(user_id: str) -> dict | None:
     with httpx.Client(timeout=15.0) as client:
         items_resp = client.get(items_url, headers=headers)
     if items_resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to load roadmap items: {items_resp.text}")
+        logger.error("Failed to load roadmap items: status=%s body=%s", items_resp.status_code, items_resp.text)
+        raise HTTPException(status_code=500, detail="Failed to load roadmap items")
 
     item_rows = items_resp.json()
     items = [
@@ -222,7 +226,8 @@ def _update_roadmap_item_db(user_id: str, item_id: str, status: str, progress: i
     with httpx.Client(timeout=15.0) as client:
         patch_resp = client.patch(patch_url, headers=headers, json=payload)
     if patch_resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to update roadmap item: {patch_resp.text}")
+        logger.error("Failed to update roadmap item: status=%s body=%s", patch_resp.status_code, patch_resp.text)
+        raise HTTPException(status_code=500, detail="Failed to update roadmap item")
 
     rows = patch_resp.json()
     if not rows:

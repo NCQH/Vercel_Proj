@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Paperclip, Send } from "lucide-react";
-import { apiClient } from "../../lib/api-client";
+import { apiClient, type ChatSessionItem, type ClassMembership, type RoadmapPriority } from "../../lib/api-client";
 import ChatBubble from "../ui/ChatBubble";
 import MainLayout from "../app-shell/MainLayout";
 
@@ -25,12 +25,6 @@ type UserProfile = {
   onboarded?: boolean;
 };
 
-type ChatSessionItem = {
-  session_id: string;
-  last_message?: string;
-  last_role?: string;
-  last_created_at?: string;
-};
 
 type SourceGroup = {
   id: string;
@@ -52,7 +46,7 @@ type RoadmapItemPreview = {
   id: string;
   topic: string;
   progress: number;
-  priority?: "high" | "medium" | "low";
+  priority?: RoadmapPriority;
 };
 
 export default function StudentChat() {
@@ -87,17 +81,17 @@ export default function StudentChat() {
     if (!identity) return;
     try {
       const [membershipsData, uploadsData] = await Promise.all([
-        apiClient.classes.list(identity, "student"),
-        apiClient.uploads.list(identity),
+        apiClient.classes.list("student"),
+        apiClient.uploads.list(),
       ]);
 
-      const approvedClasses = (membershipsData.items || [])
-        .filter((m: { status?: string; class?: { id?: string; name?: string } }) => m.status === "approved" && m.class?.id)
-        .map((m: { class: { id: string; name?: string } }) => ({ id: m.class.id, name: m.class.name || "Unknown class" }));
+      const approvedClasses = ((membershipsData.items || []) as ClassMembership[])
+        .filter((m) => m.status === "approved" && m.class?.id)
+        .map((m) => ({ id: String(m.class?.id || ""), name: m.class?.name || "Unknown class" }));
 
       const classFileResults = await Promise.all(
         approvedClasses.map(async (c: { id: string; name: string }) => {
-          const data = await apiClient.classes.listFiles(identity, c.id);
+          const data = await apiClient.classes.listFiles(c.id);
           const files = (data.items || []).map((f: { original_filename?: string }) => String(f.original_filename || "")).filter(Boolean);
           return { id: `class:${c.id}`, label: c.name, files } as SourceGroup;
         })
@@ -171,12 +165,7 @@ export default function StudentChat() {
         "";
       if (!identity) return;
       try {
-        const response = await fetch(
-          `/api/chat/sessions?user_id=${encodeURIComponent(identity)}&limit=30`,
-          { cache: "no-store" }
-        );
-        if (!response.ok) return;
-        const payload = await response.json();
+        const payload = await apiClient.chat.getSessions(30);
         setSessions(payload?.items || []);
       } catch (error) {
         console.error("Failed to load chat sessions", error);
@@ -193,10 +182,8 @@ export default function StudentChat() {
         "";
       if (!identity) return;
       try {
-        const response = await fetch(`/api/roadmap?user_id=${encodeURIComponent(identity)}`, { cache: "no-store" });
-        if (!response.ok) return;
-        const payload = await response.json();
-        const items = (payload?.items || []) as Array<{ id?: string; topic?: string; progress?: number; priority?: "high" | "medium" | "low" }>;
+        const payload = await apiClient.roadmap.get();
+        const items = payload.items || [];
         setRoadmapItems(
           items.slice(0, 4).map((item, idx) => ({
             id: String(item.id || `rm-preview-${idx + 1}`),
@@ -236,14 +223,8 @@ export default function StudentChat() {
 
       setIsLoadingHistory(true);
       try {
-        const response = await fetch(
-          `/api/chat/history?user_id=${encodeURIComponent(identity)}&session_id=${encodeURIComponent(chatSessionId)}&limit=30`,
-          { cache: "no-store" }
-        );
-        if (!response.ok) return;
-
-        const payload = await response.json();
-        const historyItems = (payload?.items || []) as Array<{ role?: string; content?: string }>;
+        const payload = await apiClient.chat.getHistory(chatSessionId, 30);
+        const historyItems = payload.items || [];
         if (!historyItems.length) {
           setMessages(initialMessages);
           return;
@@ -305,7 +286,6 @@ export default function StudentChat() {
 
       const payload = {
         message: userMessage,
-        user_id: identity,
         session_id: chatSessionId,
         preferred_sources: preferredSources,
       };
@@ -330,20 +310,7 @@ export default function StudentChat() {
         }
 
         // Fallback to non-stream endpoint for transient backend/network issues
-        const fallback = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        if (!fallback.ok) {
-          const fallbackDetail = await fallback.text().catch(() => "");
-          throw new Error(
-            `Stream failed (${response.status}). ${detail || ""} Fallback failed (${fallback.status}). ${fallbackDetail || ""}`
-          );
-        }
-
-        const fallbackJson = await fallback.json();
+        const fallbackJson = await apiClient.chat.send(payload);
         const fallbackReply = String(fallbackJson?.reply || "").trim() || "Agent did not return a response.";
         const fallbackSources = Array.isArray(fallbackJson?.sources)
           ? fallbackJson.sources.map((s: unknown) => String(s || "").trim()).filter(Boolean)
@@ -527,8 +494,7 @@ export default function StudentChat() {
         session?.user?.name ||
         "";
       if (identity) {
-        fetch(`/api/chat/sessions?user_id=${encodeURIComponent(identity)}&limit=30`, { cache: "no-store" })
-          .then((res) => (res.ok ? res.json() : null))
+        apiClient.chat.getSessions(30)
           .then((payload) => {
             if (payload?.items) setSessions(payload.items);
           })
@@ -576,17 +542,7 @@ export default function StudentChat() {
     ]);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("user_id", identity);
-
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) throw new Error("Upload failed");
-      const result = await response.json();
+      const result = await apiClient.uploads.upload(file);
 
       setMessages((current) =>
         current.map((msg) =>

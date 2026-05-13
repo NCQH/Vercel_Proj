@@ -3,7 +3,7 @@ import uuid
 import logging
 import tempfile
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Response
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
 
@@ -17,16 +17,20 @@ from api.lib.supabase import (
 )
 from src.rag.vectorstore import get_vectorstore, add_documents
 from api.lib.storage import storage_client, USER_UPLOADS_BUCKET
+from api.lib.internal_auth import verify_internal_request
 import re
 import httpx
 
-router = APIRouter(prefix="/api/uploads")
+router = APIRouter(prefix="/api/uploads", dependencies=[Depends(verify_internal_request)])
 logger = logging.getLogger(__name__)
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 
 def _safe_filename(raw: str) -> str:
     name = Path(raw or "upload.bin").name
-    name = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
-    return name[:180] or "upload.bin"
+    name = re.sub(r"[^a-zA-Z0-9._ -]", "_", name).strip(" .")
+    return name[:120] or "upload.bin"
 
 def _delete_upload_metadata_and_file(user_id: str, file_id: str) -> dict:
     headers = _supabase_headers()
@@ -41,7 +45,8 @@ def _delete_upload_metadata_and_file(user_id: str, file_id: str) -> dict:
     with httpx.Client(timeout=15.0) as client:
         lookup_resp = client.get(lookup_url, headers=headers)
     if lookup_resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to lookup upload: {lookup_resp.text}")
+        logger.error("Failed to lookup upload: status=%s body=%s", lookup_resp.status_code, lookup_resp.text)
+        raise HTTPException(status_code=500, detail="Failed to lookup upload")
 
     rows = lookup_resp.json()
     if not rows:
@@ -60,7 +65,8 @@ def _delete_upload_metadata_and_file(user_id: str, file_id: str) -> dict:
     with httpx.Client(timeout=15.0) as client:
         delete_resp = client.delete(delete_url, headers=headers)
     if delete_resp.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"Failed to delete upload metadata: {delete_resp.text}")
+        logger.error("Failed to delete upload metadata: status=%s body=%s", delete_resp.status_code, delete_resp.text)
+        raise HTTPException(status_code=500, detail="Failed to delete upload metadata")
 
     # 2) Delete file from Supabase Storage
     file_deleted = False
@@ -116,21 +122,26 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
     safe_name = _safe_filename(file.filename or "upload.bin")
     file_id = str(uuid.uuid4())
 
-    content = await file.read()
-    if len(content) > 20 * 1024 * 1024:
+    ext = Path(safe_name).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
+
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 20MB)")
 
     storage_path = f"{safe_user}/{file_id}_{safe_name}"
     try:
         storage_client.upload_file(bucket=USER_UPLOADS_BUCKET, path=storage_path, file_data=content)
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to upload file to Supabase Storage")
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to upload file")
 
     _save_upload_metadata(user_id=safe_user, file_id=file_id, original_filename=safe_name, storage_path=storage_path, size_bytes=len(content))
 
     try:
-        ext = Path(safe_name).suffix.lower()
         docs = []
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
             tmp_file.write(content)
@@ -150,9 +161,9 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
             for chunk in chunks:
                 chunk.metadata = {**(chunk.metadata or {}), "user_id": safe_user, "source": safe_name, "stored_path": storage_path}
             add_documents(get_vectorstore(user_id=safe_user), chunks)
-    except Exception as e:
+    except Exception:
         logger.exception("RAG ingest failed")
-        raise HTTPException(status_code=500, detail=f"Upload saved but RAG ingest failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Upload saved but RAG ingest failed")
 
     # Invalidate cache so user sees new file immediately
     try:
@@ -181,11 +192,12 @@ def download_upload(file_id: str = "", user_id: str = ""):
     storage_path = str(target.get("path") or "")
     try:
         file_content = storage_client.download_file(bucket=USER_UPLOADS_BUCKET, path=storage_path)
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to download file")
-        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to download file")
 
-    return Response(content=file_content, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{target.get("filename") or "download.bin"}"'})
+    download_name = _safe_filename(target.get("filename") or "download.bin")
+    return Response(content=file_content, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{download_name}"'})
 
 @router.delete("/{file_id}")
 def delete_upload(file_id: str, user_id: str = ""):

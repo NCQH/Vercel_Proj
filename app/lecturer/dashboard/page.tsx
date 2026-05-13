@@ -3,18 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import MainLayout from "../../../components/app-shell/MainLayout";
+import { apiClient, ApiError, type ClassMembership, type ClassSummary, type MembershipStatus } from "../../../lib/api-client";
 
-type ClassItem = { id: string; name: string; code: string; description?: string };
-type MemberItem = {
+type ClassItem = Required<Pick<ClassSummary, "id" | "name" | "code">> & Pick<ClassSummary, "description">;
+type MemberItem = ClassMembership & {
   id: string;
   class_id: string;
   student_id: string;
-  full_name?: string;
   student_name?: string;
-  student_email?: string;
-  status: "pending" | "approved" | "rejected";
-  requested_at?: string;
-  approved_at?: string;
+  status: MembershipStatus;
 };
 
 export default function LecturerDashboardPage() {
@@ -35,58 +32,40 @@ export default function LecturerDashboardPage() {
   const loadClasses = async () => {
     if (!identity) return;
     setError("");
-    const res = await fetch(`/api/classes?user_id=${encodeURIComponent(identity)}&role=lecturer`, {
-      cache: "no-store",
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data?.detail || "Failed to load classes");
-      return;
+    try {
+      const data = await apiClient.classes.list("lecturer");
+      const items = (data.items || []) as ClassItem[];
+      setClasses(items);
+      if (!selectedClassId && items[0]?.id) setSelectedClassId(items[0].id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to load classes");
     }
-
-    const items = (data.items || []) as ClassItem[];
-    setClasses(items);
-    if (!selectedClassId && items[0]?.id) setSelectedClassId(items[0].id);
   };
 
   const loadMembers = async (classId: string) => {
     if (!identity || !classId) return;
     setLoading(true);
     setError("");
-    const res = await fetch(
-      `/api/classes/members?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(classId)}`,
-      { cache: "no-store" }
-    );
-    const data = await res.json();
-    if (!res.ok) {
+    try {
+      const data = await apiClient.classes.listMembers(classId);
+      setMembers((data.items || []) as MemberItem[]);
+    } catch (err) {
       setMembers([]);
-      setError(data?.detail || "Failed to load students");
+      setError(err instanceof ApiError ? err.message : "Failed to load students");
+    } finally {
       setLoading(false);
-      return;
     }
-    setMembers((data.items || []) as MemberItem[]);
-    setLoading(false);
   };
 
   const updateMemberStatus = async (membershipId: string, approve: boolean) => {
     if (!identity) return;
     setError("");
-    const fd = new FormData();
-    fd.append("user_id", identity);
-    fd.append("approve", String(approve));
-
-    const res = await fetch(`/api/classes/members/${membershipId}/approve`, {
-      method: "POST",
-      body: fd,
-    });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data?.detail || "Failed to update student status");
-      return;
+    try {
+      await apiClient.classes.approveRequest(membershipId, approve);
+      await loadMembers(selectedClassId);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to update student status");
     }
-
-    await loadMembers(selectedClassId);
   };
 
   useEffect(() => {

@@ -6,7 +6,7 @@ import re
 import time
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from api.models.schemas import ChatRequest
@@ -20,8 +20,9 @@ from api.lib.supabase import (
     _list_chat_sessions,
 )
 from src.base_agent import run_agent
+from api.lib.internal_auth import verify_internal_request
 
-router = APIRouter(prefix="/api/chat")
+router = APIRouter(prefix="/api/chat", dependencies=[Depends(verify_internal_request)])
 logger = logging.getLogger(__name__)
 
 _MAX_CHAT_MESSAGE_LEN = 4000
@@ -177,7 +178,7 @@ async def chat(request: ChatRequest):
         raise
     except Exception as e:
         logger.exception("[CHAT][%s] Chat error total_ms=%.2f", rid, _elapsed_ms(req_start))
-        raise HTTPException(status_code=500, detail=f"Agent encountered an error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Agent encountered an internal error.")
 
 
 @router.get("/history")
@@ -310,6 +311,6 @@ async def chat_stream(request: ChatRequest):
             yield "\n[ERROR] Agent timeout, please try again."
         except Exception as e:
             logger.exception("[CHAT][%s] Chat stream error total_ms=%.2f", rid, _elapsed_ms(req_start))
-            yield f"\n[ERROR] Agent encountered an error: {str(e)}"
+            yield "\n[ERROR] Agent encountered an internal error."
 
     return StreamingResponse(event_generator(), media_type="text/plain; charset=utf-8")

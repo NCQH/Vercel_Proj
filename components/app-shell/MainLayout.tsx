@@ -12,6 +12,7 @@ import {
   FileText,
   Home,
 } from "lucide-react";
+import { apiClient, type ClassMembership } from "../../lib/api-client";
 
 interface MainLayoutProps {
   role: "student" | "lecturer";
@@ -90,25 +91,19 @@ export default function MainLayout({ role, children }: MainLayoutProps) {
 
     const checkNewMaterials = async () => {
       try {
-        const membershipsRes = await fetch(`/api/classes?user_id=${encodeURIComponent(identity)}&role=student`, { cache: "no-store" });
-        if (!membershipsRes.ok) return;
-        const membershipsData = await membershipsRes.json();
-        const approvedClassIds = (membershipsData.items || [])
-          .filter((m: { status?: string; class?: { id?: string } }) => m.status === "approved" && m.class?.id)
-          .map((m: { class: { id: string } }) => m.class.id);
+        const membershipsData = await apiClient.classes.list("student");
+        const approvedClassIds = ((membershipsData.items || []) as ClassMembership[])
+          .filter((m) => m.status === "approved" && m.class?.id)
+          .map((m) => String(m.class?.id || ""));
 
         if (approvedClassIds.length === 0) {
           setHasNewMaterials(false);
           return;
         }
 
-        const fileResponses = await Promise.all(
-          approvedClassIds.map((classId: string) =>
-            fetch(`/api/class-files?user_id=${encodeURIComponent(identity)}&class_id=${encodeURIComponent(classId)}`, { cache: "no-store" })
-          )
+        const fileJsons = await Promise.all(
+          approvedClassIds.map((classId) => apiClient.classes.listFiles(classId))
         );
-
-        const fileJsons = await Promise.all(fileResponses.map((r) => (r.ok ? r.json() : Promise.resolve({ items: [] }))));
         const allFiles = fileJsons.flatMap((j) => j.items || []);
         const latestUploadedAt = allFiles.reduce((max: number, f: { uploaded_at?: string }) => {
           const t = f.uploaded_at ? new Date(f.uploaded_at).getTime() : 0;

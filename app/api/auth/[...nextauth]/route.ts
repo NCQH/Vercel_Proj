@@ -33,7 +33,7 @@ export const authOptions: NextAuthOptions = {
   },
   callbacks: {
     async signIn({ user }) {
-      return true;
+      return await isRegisteredAndOnboarded(user.email);
     },
     async jwt({ token, user, profile }) {
       if (user) {

@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Response
+from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from dotenv import load_dotenv
 
@@ -12,6 +12,7 @@ from api.routes import chat, roadmap, uploads, classes
 from api.lib.supabase import _safe_user_id, close_supabase_client, _supabase_cache_stats
 from api.lib.storage import storage_client
 from api.lib.async_http import close_async_client
+from api.lib.internal_auth import verify_internal_request
 
 from src.memory.memory_service import (
     load_short_term_memory,
@@ -43,25 +44,42 @@ async def shutdown_clients() -> None:
 
 # For backward compatibility with old frontend endpoints
 @app.post("/api/upload")
-async def legacy_upload(file: UploadFile = File(...), user_id: str = Form("")):
+async def legacy_upload(
+    file: UploadFile = File(...),
+    user_id: str = Form(""),
+    _internal_auth: None = Depends(verify_internal_request),
+):
     # Maps /api/upload -> uploads.upload_file
     return await uploads.upload_file(file, user_id)
 
 
 @app.get("/api/class-files")
-async def legacy_list_class_files(user_id: str = "", class_id: str = ""):
+async def legacy_list_class_files(
+    user_id: str = "",
+    class_id: str = "",
+    _internal_auth: None = Depends(verify_internal_request),
+):
     # Maps /api/class-files -> classes.list_files
     return classes.list_files(user_id, class_id)
 
 
 @app.post("/api/class-files/upload")
-async def legacy_upload_class_file(file: UploadFile = File(...), user_id: str = Form(""), class_id: str = Form("")):
+async def legacy_upload_class_file(
+    file: UploadFile = File(...),
+    user_id: str = Form(""),
+    class_id: str = Form(""),
+    _internal_auth: None = Depends(verify_internal_request),
+):
     # Maps /api/class-files/upload -> classes.upload_class_file
     return await classes.upload_class_file(file, user_id, class_id)
 
 
 @app.get("/api/class-files/download")
-async def legacy_download_class_file(file_id: str = "", user_id: str = ""):
+async def legacy_download_class_file(
+    file_id: str = "",
+    user_id: str = "",
+    _internal_auth: None = Depends(verify_internal_request),
+):
     # Maps /api/class-files/download -> classes.download_class_file_route
     return classes.download_class_file_route(file_id, user_id)
 

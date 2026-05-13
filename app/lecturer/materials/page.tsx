@@ -2,12 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
-import { apiClient } from "../../../lib/api-client";
+import { apiClient, type ClassFile, type ClassMembership, type ClassSummary } from "../../../lib/api-client";
 import MainLayout from "../../../components/app-shell/MainLayout";
 
-type ClassItem = { id: string; name: string; code: string; description?: string };
-type PendingItem = { id: string; class_id: string; student_id: string; status: string; requested_at: string };
-type ClassFile = { file_id: string; original_filename: string; size_bytes: number; uploaded_at: string };
+type ClassItem = Required<Pick<ClassSummary, "id" | "name" | "code">> & Pick<ClassSummary, "description">;
+type PendingItem = ClassMembership & { id: string; class_id: string; student_id: string; status: string; requested_at: string };
 
 export default function LecturerMaterialsPage() {
   const { data: session } = useSession();
@@ -26,8 +25,8 @@ export default function LecturerMaterialsPage() {
   const loadClasses = async () => {
     if (!identity) return;
     try {
-      const data = await apiClient.classes.list(identity, "lecturer");
-      const items = data.items || [];
+      const data = await apiClient.classes.list("lecturer");
+      const items = (data.items || []) as ClassItem[];
       setClasses(items);
       if (!selectedClassId && items[0]?.id) setSelectedClassId(items[0].id);
     } catch (err) {
@@ -38,8 +37,8 @@ export default function LecturerMaterialsPage() {
   const loadPending = async (classId: string) => {
     if (!identity) return;
     try {
-      const data = await apiClient.classes.listPendingRequests(identity, classId);
-      setPending(data.items || []);
+      const data = await apiClient.classes.listPendingRequests(classId);
+      setPending((data.items || []) as PendingItem[]);
     } catch (err) {
       console.error("Failed to load pending requests", err);
     }
@@ -48,7 +47,7 @@ export default function LecturerMaterialsPage() {
   const loadFiles = async (classId: string) => {
     if (!identity) return;
     try {
-      const data = await apiClient.classes.listFiles(identity, classId);
+      const data = await apiClient.classes.listFiles(classId);
       setClassFiles(data.items || []);
     } catch (err) {
       console.error("Failed to load files", err);
@@ -64,7 +63,7 @@ export default function LecturerMaterialsPage() {
 
   const createClass = async () => {
     try {
-      await apiClient.classes.create(identity, name, description);
+      await apiClient.classes.create(name, description);
       setName("");
       setDescription("");
       await loadClasses();
@@ -75,7 +74,7 @@ export default function LecturerMaterialsPage() {
 
   const approve = async (id: string, ok: boolean) => {
     try {
-      await apiClient.classes.approveRequest(identity, id, ok);
+      await apiClient.classes.approveRequest(id, ok);
       await loadPending(selectedClassId);
     } catch (err) {
       console.error("Failed to approve/reject", err);
@@ -83,14 +82,11 @@ export default function LecturerMaterialsPage() {
   };
 
   const uploadClassFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const file = fileRef.current?.files?.[0];
     if (!file || !selectedClassId) return;
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("user_id", identity);
-    fd.append("class_id", selectedClassId);
+    setFileActionMessage("");
     try {
-      await fetch("/api/class-files/upload", { method: "POST", body: fd });
+      await apiClient.classes.uploadFile(selectedClassId, file);
       setFileActionMessage(`Uploaded ${file.name} successfully.`);
       await loadFiles(selectedClassId);
     } catch (err) {
@@ -110,14 +106,7 @@ export default function LecturerMaterialsPage() {
     setDeletingFileId(fileId);
     setFileActionMessage("");
     try {
-      const res = await fetch(`/api/classes/files/${encodeURIComponent(fileId)}?user_id=${encodeURIComponent(identity)}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setFileActionMessage(data?.detail || "Delete failed. Please try again.");
-        return;
-      }
+      await apiClient.classes.deleteClassFile(fileId);
       setFileActionMessage(`Deleted ${filename} successfully.`);
       await loadFiles(selectedClassId);
     } catch (err) {
@@ -204,11 +193,11 @@ export default function LecturerMaterialsPage() {
                   </div>
                   <div>
                     <div className="font-bold text-slate-900 text-sm">{f.original_filename}</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5 font-medium">Uploaded: {new Date(f.uploaded_at).toLocaleDateString()}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5 font-medium">Uploaded: {f.uploaded_at ? new Date(f.uploaded_at).toLocaleDateString() : "Unknown"}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?user_id=${encodeURIComponent(identity)}&file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center">Download</a>
+                  <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition sm:opacity-0 sm:group-hover:opacity-100 text-center">Download</a>
                   <button
                     id={`delete-class-file-${f.file_id}`}
                     onClick={() => deleteClassFile(f.file_id, f.original_filename)}

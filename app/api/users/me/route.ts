@@ -17,8 +17,9 @@ export async function GET() {
     const profile = await getUserProfile(user.id);
     return NextResponse.json({ ok: true, profile, onboarded: Boolean(profile?.onboarded) });
   } catch (error) {
+    console.error("Failed to load user profile", error);
     return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "Unknown error" },
+      { ok: false, error: "Failed to load user profile" },
       { status: 500 }
     );
   }
