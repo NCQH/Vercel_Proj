@@ -276,7 +276,25 @@ export default function StudentChat() {
       ? `\n\n[Tagged files: ${preferredSources.join(", ")}]`
       : "";
 
-    let stepText = "Initializing agent...";
+    let stepText = "Connecting to agent...";
+    let preStreamTimer: ReturnType<typeof setInterval> | undefined;
+
+    const updateThinkingMessage = (nextText: string) => {
+      setMessages((current) => {
+        const next = [...current];
+        const lastAssistantIndex = [...next]
+          .map((m, idx) => ({ m, idx }))
+          .reverse()
+          .find(({ m }) => m.role === "assistant")?.idx;
+        if (lastAssistantIndex === undefined) return current;
+        next[lastAssistantIndex] = {
+          ...next[lastAssistantIndex],
+          text: nextText,
+          isThinking: true,
+        };
+        return next;
+      });
+    };
 
     setMessages((current) => {
       const userId = String(current.length + 1);
@@ -291,6 +309,10 @@ export default function StudentChat() {
     setDraft("");
 
     try {
+      preStreamTimer = setInterval(() => {
+        updateThinkingMessage("Connecting to agent...");
+      }, 2000);
+
       const identity =
         (session?.user as { id?: string } | undefined)?.id ||
         session?.user?.email ||
@@ -313,6 +335,7 @@ export default function StudentChat() {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
+      if (preStreamTimer) clearInterval(preStreamTimer);
 
       if (!response.ok || !response.body) {
         let detail = "";
@@ -355,11 +378,7 @@ export default function StudentChat() {
       let streamedSources: string[] = [];
       let lastRenderedDisplay = "";
       const waitingSteps = [
-        "Loading memory context...",
-        "Checking content safety & intent...",
-        "Searching knowledge base...",
-        "Drafting response...",
-        "Still working on your answer...",
+        "Waiting for agent progress...",
       ];
       let waitingStepIndex = 0;
       const waitingTimer = setInterval(() => {
@@ -517,6 +536,7 @@ export default function StudentChat() {
         return next;
       });
     } finally {
+      if (preStreamTimer) clearInterval(preStreamTimer);
       const identity =
         (session?.user as { id?: string } | undefined)?.id ||
         session?.user?.email ||

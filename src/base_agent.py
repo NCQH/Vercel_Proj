@@ -12,7 +12,7 @@ import logging
 from langchain_core.messages import HumanMessage
 
 from src.config import LOG_LEVEL
-from src.graph.builder import graph
+from src.graph.builder import graph, route_after_guardrail
 from src.memory.memory_service import debug_memory_recall
 from src.config import MEMORY_FACT_MAX_DISTANCE, MEMORY_FACT_TOP_K
 
@@ -24,27 +24,15 @@ logger = logging.getLogger(__name__)
 # Public API
 # ------------------------------------------------------------------
 
-def run_agent(
+def _build_initial_state(
     user_input: str,
     user_id: str = "default",
     session_id: str = "default",
     allowed_sources: list[str] | None = None,
     allowed_collections: list[str] | None = None,
     preferred_sources: list[str] | None = None,
-) -> tuple[str, dict]:
-    """
-    Run the LangGraph agent and return the final answer string and state.
-
-    Args:
-        user_input:  The user's question.
-        user_id:     Identifies the user for memory.
-        session_id:  Groups turns within a session.
-
-    Returns:
-        Tuple of (final_answer, state) where state contains sources and other metadata.
-    """
-
-    initial_state = {
+) -> dict:
+    return {
         "messages": [HumanMessage(content=user_input)],
         "user_id": user_id,
         "session_id": session_id,
@@ -63,10 +51,19 @@ def run_agent(
         "is_academic": False,
     }
 
-    # Invoke the compiled LangGraph (recursion_limit acts as max_turns)
+
+def run_agent(
+    user_input: str,
+    user_id: str = "default",
+    session_id: str = "default",
+    allowed_sources: list[str] | None = None,
+    allowed_collections: list[str] | None = None,
+    preferred_sources: list[str] | None = None,
+) -> tuple[str, dict]:
+    """Run the LangGraph agent and return the final answer string and state."""
+    initial_state = _build_initial_state(user_input, user_id, session_id, allowed_sources, allowed_collections, preferred_sources)
     result = graph.invoke(initial_state, {"recursion_limit": 25})
 
-    # Extract the final assistant message
     final_answer = ""
     for msg in reversed(result["messages"]):
         if msg.type == "ai" and not getattr(msg, "tool_calls", None):
@@ -74,6 +71,52 @@ def run_agent(
             break
 
     return final_answer, result
+
+
+def run_agent_events(
+    user_input: str,
+    user_id: str = "default",
+    session_id: str = "default",
+    allowed_sources: list[str] | None = None,
+    allowed_collections: list[str] | None = None,
+    preferred_sources: list[str] | None = None,
+):
+    """Yield real execution events from the LangGraph run."""
+    state = _build_initial_state(user_input, user_id, session_id, allowed_sources, allowed_collections, preferred_sources)
+    latest_state = state
+    yield {"type": "step", "step": "Loading memory context", "node": "load_memory"}
+
+    for event in graph.stream(state, {"recursion_limit": 25}, stream_mode="updates"):
+        for node_name, update in event.items():
+            if isinstance(update, dict):
+                latest_state = {**latest_state, **update}
+
+            if node_name == "load_memory":
+                yield {"type": "step", "step": "Checking content safety & intent", "node": "guardrail_input"}
+            elif node_name == "guardrail_input":
+                route = route_after_guardrail(latest_state)
+                if route == "retrieval":
+                    yield {"type": "step", "step": "Searching knowledge base", "node": "retrieval"}
+                elif route == "direct":
+                    yield {"type": "step", "step": "Drafting response", "node": "tutor"}
+                else:
+                    yield {"type": "step", "step": "Saving conversation memory", "node": "save_memory"}
+            elif node_name == "retrieval":
+                sources = latest_state.get("sources") or []
+                chunk_count = len(latest_state.get("retrieved_chunks") or [])
+                yield {
+                    "type": "step",
+                    "step": f"Retrieved {chunk_count} relevant chunk(s) from {len(sources)} source(s)",
+                    "node": "tutor",
+                }
+            elif node_name == "tutor":
+                yield {"type": "step", "step": "Saving conversation memory", "node": "save_memory"}
+            elif node_name == "save_memory":
+                yield {"type": "done", "state": latest_state}
+                return
+
+    yield {"type": "done", "state": latest_state}
+
 
 
 # ------------------------------------------------------------------

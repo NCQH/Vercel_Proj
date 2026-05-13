@@ -19,7 +19,7 @@ from api.lib.supabase import (
     _safe_user_id,
     _list_chat_sessions,
 )
-from src.base_agent import run_agent
+from src.base_agent import run_agent, run_agent_events
 from api.lib.internal_auth import verify_internal_request
 
 router = APIRouter(prefix="/api/chat", dependencies=[Depends(verify_internal_request)])
@@ -46,6 +46,38 @@ def _elapsed_ms(start: float) -> float:
 
 def _log_step(rid: str, step: str, start: float) -> None:
     logger.info("[CHAT][%s] step=%s elapsed_ms=%.2f", rid, step, _elapsed_ms(start))
+
+
+async def _iterate_agent_events(*args):
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def worker():
+        try:
+            for event in run_agent_events(*args):
+                queue.put_nowait(("event", event))
+            queue.put_nowait(("done", None))
+        except Exception as exc:
+            queue.put_nowait(("error", exc))
+
+    task = asyncio.create_task(asyncio.to_thread(worker))
+    try:
+        while True:
+            kind, payload = await queue.get()
+            if kind == "event":
+                yield payload
+            elif kind == "error":
+                raise payload
+            else:
+                break
+    finally:
+        await task
+
+
+def _extract_final_answer(state: dict) -> str:
+    for msg in reversed(state.get("messages") or []):
+        if getattr(msg, "type", "") == "ai" and not getattr(msg, "tool_calls", None):
+            return str(getattr(msg, "content", "") or "")
+    return str(state.get("final_answer") or "")
 
 
 def _strip_guardrail_metadata_prefix(raw: str) -> str:
@@ -251,23 +283,23 @@ async def chat_stream(request: ChatRequest):
             preferred_sources = _sanitize_preferred_sources(request.preferred_sources, allowed_sources)
             await asyncio.sleep(0)
 
-            yield "__STEP__:Searching knowledge base...\n"
-            await asyncio.sleep(0)
-
-            yield "__STEP__:Drafting response...\n"
             agent_start = time.perf_counter()
-            final_answer, state = await asyncio.wait_for(
-                asyncio.to_thread(
-                    run_agent,
-                    safe_message,
-                    safe_user,
-                    request.session_id,
-                    allowed_sources,
-                    allowed_collections,
-                    preferred_sources,
-                ),
-                timeout=_RUN_AGENT_TIMEOUT_SECONDS,
-            )
+            final_answer = ""
+            state = {}
+            async for agent_event in _iterate_agent_events(
+                safe_message,
+                safe_user,
+                request.session_id,
+                allowed_sources,
+                allowed_collections,
+                preferred_sources,
+            ):
+                if agent_event.get("type") == "step":
+                    yield f"__STEP__:{agent_event.get('step') or 'Working...'}\n"
+                    await asyncio.sleep(0)
+                elif agent_event.get("type") == "done":
+                    state = agent_event.get("state") or {}
+                    final_answer = _extract_final_answer(state)
             _log_step(rid, "stream_run_agent", agent_start)
 
             text = str(final_answer or "").strip()
