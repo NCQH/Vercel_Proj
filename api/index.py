@@ -1,4 +1,11 @@
 import os
+
+# Must be set before importing Chroma/LangChain/ONNX-related modules.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+os.environ.setdefault("ORT_LOGGING_LEVEL", "3")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 import sys
 import logging
 from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form, Response
