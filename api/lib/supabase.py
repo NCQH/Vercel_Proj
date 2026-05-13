@@ -115,6 +115,7 @@ def _save_chat_message(
     role: str,
     content: str,
     citations: list[str] | None = None,
+    selected_sources: list[str] | None = None,
 ) -> None:
     headers = _supabase_headers()
     payload = {
@@ -122,7 +123,7 @@ def _save_chat_message(
         "session_id": session_id,
         "role": role,
         "content": content,
-        "citations": citations or [],
+        "citations": (citations or []) + [f"selected_source:{src}" for src in (selected_sources or []) if str(src).strip()],
     }
 
     response = _request_with_retry(
@@ -154,6 +155,14 @@ def _get_recent_chat_history(user_id: str, session_id: str, limit: int = 8) -> l
         raise HTTPException(status_code=500, detail=f"Failed to load chat history: {response.text}")
 
     rows = response.json()
+    for row in rows:
+        raw_citations = row.get("citations") if isinstance(row.get("citations"), list) else []
+        row["selected_sources"] = [
+            str(c).replace("selected_source:", "", 1)
+            for c in raw_citations
+            if str(c).startswith("selected_source:")
+        ]
+        row["citations"] = [c for c in raw_citations if not str(c).startswith("selected_source:")]
     rows.reverse()
     return rows
 

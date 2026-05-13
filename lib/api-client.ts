@@ -39,6 +39,8 @@ export interface ChatHistoryItem {
   role?: "user" | "assistant" | string;
   content?: string;
   sources?: string[];
+  citations?: string[];
+  selected_sources?: string[];
   created_at?: string;
   session_id?: string;
 }

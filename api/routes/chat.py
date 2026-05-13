@@ -188,7 +188,15 @@ async def chat(request: ChatRequest):
         clean_sources = [str(s) for s in sources if str(s).strip()]
 
         save_start = time.perf_counter()
-        await asyncio.to_thread(_save_chat_message, safe_user, request.session_id, "user", safe_message)
+        await asyncio.to_thread(
+            _save_chat_message,
+            safe_user,
+            request.session_id,
+            "user",
+            safe_message,
+            None,
+            preferred_sources,
+        )
         await asyncio.to_thread(
             _save_chat_message,
             safe_user,
@@ -321,7 +329,15 @@ async def chat_stream(request: ChatRequest):
                 text = "Agent did not return a response."
 
             save_start = time.perf_counter()
-            await asyncio.to_thread(_save_chat_message, safe_user, request.session_id, "user", safe_message)
+            await asyncio.to_thread(
+                _save_chat_message,
+                safe_user,
+                request.session_id,
+                "user",
+                safe_message,
+                None,
+                preferred_sources,
+            )
             await asyncio.to_thread(
                 _save_chat_message,
                 safe_user,

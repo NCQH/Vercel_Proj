@@ -252,6 +252,9 @@ export default function StudentChat() {
               .map((c) => String(c || "").trim())
               .filter(Boolean)
             : [],
+          selectedSources: Array.isArray(item.selected_sources)
+            ? item.selected_sources.map((s) => String(s || "").trim()).filter(Boolean)
+            : [],
         })) as Message[];
 
         setMessages(mappedHistory);
