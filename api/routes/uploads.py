@@ -160,16 +160,47 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
             try: os.unlink(tmp_path)
             except Exception: pass
 
-        if docs:
-            splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
-            chunks = splitter.split_documents(docs)[:MAX_INGEST_CHUNKS]
-            logger.info("Indexing %d chunk(s) for upload %s", len(chunks), safe_name)
-            for chunk in chunks:
-                chunk.metadata = {**(chunk.metadata or {}), "user_id": safe_user, "source": safe_name, "stored_path": storage_path, "file_id": file_id}
-            add_documents(get_vectorstore(user_id=safe_user), chunks)
-    except Exception:
-        logger.exception("RAG ingest failed")
-        raise HTTPException(status_code=500, detail="Upload saved but RAG ingest failed")
+        doc_chars = sum(len(doc.page_content or "") for doc in docs)
+        logger.info("Extracted %d document(s), chars=%d for upload %s", len(docs), doc_chars, safe_name)
+        if not docs or doc_chars <= 0:
+            raise ValueError("Không trích xuất được nội dung từ file. PDF scan/image-only chưa được hỗ trợ.")
+
+        splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
+        chunks = splitter.split_documents(docs)[:MAX_INGEST_CHUNKS]
+        logger.info("Indexing %d chunk(s) for upload %s", len(chunks), safe_name)
+        if not chunks:
+            raise ValueError("Không tạo được chunk từ nội dung file.")
+
+        for idx, chunk in enumerate(chunks):
+            chunk.metadata = {
+                **(chunk.metadata or {}),
+                "user_id": safe_user,
+                "source": safe_name,
+                "stored_path": storage_path,
+                "file_id": file_id,
+                "chunk_index": idx,
+            }
+
+        vectorstore = get_vectorstore(user_id=safe_user)
+        add_documents(vectorstore, chunks)
+        collection = getattr(vectorstore, "_collection", None)
+        if collection is None:
+            raise RuntimeError("Không lấy được Chroma collection sau khi ingest.")
+
+        count = collection.count()
+        verify = collection.get(where={"file_id": file_id}, limit=1)
+        ids = verify.get("ids") if isinstance(verify, dict) else []
+        if not ids:
+            raise RuntimeError("Không xác minh được chunk trong Chroma sau khi ingest.")
+        logger.info("Chroma collection=%s count=%d verified_file_id=%s after upload %s", collection.name, count, file_id, safe_name)
+    except Exception as exc:
+        logger.exception("RAG ingest failed for upload %s", safe_name)
+        try:
+            _delete_upload_metadata_and_file(safe_user, file_id)
+            logger.info("Rolled back failed upload user=%s file_id=%s", safe_user, file_id)
+        except Exception:
+            logger.warning("Failed to rollback upload after ingest failure user=%s file_id=%s", safe_user, file_id, exc_info=True)
+        raise HTTPException(status_code=422, detail=str(exc) or "Upload failed because RAG ingest did not complete.")
 
     # Invalidate cache so user sees new file immediately
     try:

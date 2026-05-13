@@ -14,8 +14,9 @@ def get_chroma_client():
             api_key=CHROMA_API_KEY
         )
     else:
-        # Fallback to local
-        db_dir = "/tmp/chroma_db" if os.environ.get("VERCEL") else CHROMA_DB_DIR
+        # Use an absolute project-root path. Relative paths depend on process cwd
+        # and can make chunks appear to be missing when inspecting Chroma locally.
+        db_dir = "/tmp/chroma_db" if os.environ.get("VERCEL") else os.path.abspath(CHROMA_DB_DIR)
         return chromadb.PersistentClient(path=db_dir)
 
 def _safe_collection_suffix(raw: str) -> str:

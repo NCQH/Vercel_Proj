@@ -491,25 +491,60 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
             try: os.unlink(tmp_path)
             except Exception: pass
         
-        if docs:
-            splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
-            chunks = splitter.split_documents(docs)[:MAX_INGEST_CHUNKS]
-            logger.info("Indexing %d chunk(s) for class file %s", len(chunks), safe_name)
-            for chunk in chunks:
-                chunk.metadata = {
-                    **(chunk.metadata or {}),
-                    "class_id": class_id,
-                    "source": safe_name,
-                    "stored_path": storage_path,
-                    "file_id": file_id
-                }
-            
-            from src.rag.vectorstore import get_vectorstore, add_documents
-            add_documents(get_vectorstore(user_id=f"class_{class_id}"), chunks)
-            logger.info(f"Ingested {len(chunks)} chunks for class file {file_id} in class {class_id}")
-    except Exception as e:
-        logger.exception("RAG ingest failed for class file")
-        # Don't fail the upload, just log the error
+        doc_chars = sum(len(doc.page_content or "") for doc in docs)
+        logger.info("Extracted %d document(s), chars=%d for class file %s", len(docs), doc_chars, safe_name)
+        if not docs or doc_chars <= 0:
+            raise ValueError("Không trích xuất được nội dung từ file. PDF scan/image-only chưa được hỗ trợ.")
+
+        splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
+        chunks = splitter.split_documents(docs)[:MAX_INGEST_CHUNKS]
+        logger.info("Indexing %d chunk(s) for class file %s", len(chunks), safe_name)
+        if not chunks:
+            raise ValueError("Không tạo được chunk từ nội dung file.")
+
+        for idx, chunk in enumerate(chunks):
+            chunk.metadata = {
+                **(chunk.metadata or {}),
+                "class_id": class_id,
+                "source": safe_name,
+                "stored_path": storage_path,
+                "file_id": file_id,
+                "chunk_index": idx,
+            }
+
+        from src.rag.vectorstore import get_vectorstore, add_documents
+        vectorstore = get_vectorstore(user_id=f"class_{class_id}")
+        add_documents(vectorstore, chunks)
+        collection = getattr(vectorstore, "_collection", None)
+        if collection is None:
+            raise RuntimeError("Không lấy được Chroma collection sau khi ingest.")
+
+        count = collection.count()
+        verify = collection.get(where={"file_id": file_id}, limit=1)
+        ids = verify.get("ids") if isinstance(verify, dict) else []
+        if not ids:
+            raise RuntimeError("Không xác minh được chunk trong Chroma sau khi ingest.")
+        logger.info("Chroma collection=%s count=%d verified_file_id=%s after class file %s", collection.name, count, file_id, safe_name)
+        logger.info(f"Ingested {len(chunks)} chunks for class file {file_id} in class {class_id}")
+    except Exception as exc:
+        logger.exception("RAG ingest failed for class file %s", safe_name)
+        try:
+            if storage_client and storage_path:
+                storage_client.delete_file(bucket=CLASS_FILES_BUCKET, path=storage_path)
+            headers = _supabase_headers()
+            with httpx.Client(timeout=15.0) as client:
+                client.delete(f"{SUPABASE_URL}/rest/v1/class_files?file_id=eq.{_encode_eq(file_id)}", headers=headers)
+            try:
+                from src.rag.vectorstore import get_vectorstore
+                collection = getattr(get_vectorstore(user_id=f"class_{class_id}"), "_collection", None)
+                if collection is not None:
+                    collection.delete(where={"file_id": file_id})
+            except Exception:
+                logger.warning("Failed to rollback class chunks file_id=%s", file_id, exc_info=True)
+            logger.info("Rolled back failed class upload class_id=%s file_id=%s", class_id, file_id)
+        except Exception:
+            logger.warning("Failed to rollback class upload after ingest failure class_id=%s file_id=%s", class_id, file_id, exc_info=True)
+        raise HTTPException(status_code=422, detail=str(exc) or "Upload failed because RAG ingest did not complete.")
     
     # Invalidate cache for all approved class members
     try:

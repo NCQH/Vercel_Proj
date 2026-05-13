@@ -83,7 +83,7 @@ def extract_documents_from_file(path: str, filename: str, metadata: dict[str, An
     if ext in {".txt", ".md"}:
         return _read_text_file(path, filename, metadata)
 
-    if ext == ".pdf" and not USE_MARKITDOWN_FOR_PDF:
+    if ext == ".pdf":
         return _read_pdf_lightweight(path, filename, metadata)
 
     try:
