@@ -18,7 +18,12 @@ def route_after_guardrail(state: AgentState) -> str:
     """Route to retrieval, tutor (direct), or save_memory if rejected."""
     if not state.get("guardrail_passed", True):
         return "save_memory"
-    
+
+    # If UI sends selected files, user expects answer from those documents.
+    # This fixes prompts like "Tóm tắt file" being classified as direct chat.
+    if state.get("preferred_sources"):
+        return "retrieval"
+
     return "retrieval" if state.get("route") == "retrieval" else "direct"
 
 
