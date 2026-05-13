@@ -64,6 +64,13 @@ def generate_answer(question: str, chunks: List[dict], is_academic: bool = False
         top_sources,
     )
 
+    has_context = bool(context)
+
+    # If retrieval returned chunks (for example user selected a file), answer from context
+    # even when the guardrail classifier marked the short prompt as non-academic.
+    if has_context:
+        is_academic = True
+
     # Policy: study-related question should retrieve first.
     # If retrieval confidence is low and evidence is too thin, answer with explicit uncertainty.
     if is_academic and max_score < 0.03 and len(chunks or []) < 2:
