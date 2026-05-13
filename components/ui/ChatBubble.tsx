@@ -5,6 +5,7 @@ interface ChatBubbleProps {
   role: "user" | "assistant";
   message: string;
   citations?: string[];
+  selectedSources?: string[];
   isThinking?: boolean;
 }
 
@@ -138,6 +139,7 @@ export default function ChatBubble({
   role,
   message,
   citations = [],
+  selectedSources = [],
   isThinking = false,
 }: ChatBubbleProps) {
   const isAssistant = role === "assistant";
@@ -166,6 +168,20 @@ export default function ChatBubble({
       <div className={`mt-3 text-[15px] leading-relaxed whitespace-pre-wrap transition-all duration-500 ${isAssistant ? "text-slate-100" : "text-slate-800"} ${isThinking ? "italic animate-pulse opacity-70 select-none" : ""}`}>
         {isAssistant && !isThinking ? renderAssistantMarkdown(message) : message}
       </div>
+      {!isAssistant && selectedSources.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-indigo-200/70 pt-3">
+          {selectedSources.map((source) => (
+            <span
+              key={source}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-indigo-200 bg-white/80 px-3 py-1 text-[11px] font-bold text-indigo-700 shadow-sm"
+              title={source}
+            >
+              <FileText className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{source}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
       {citations.length > 0 && !isThinking ? (
         <div className="mt-4 flex flex-wrap gap-2 border-t border-white/10 pt-3">
           {citations.map((citation) => {

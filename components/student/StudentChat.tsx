@@ -14,6 +14,7 @@ type Message = {
   role: string;
   text: string;
   citations?: string[];
+  selectedSources?: string[];
   isThinking?: boolean;
 };
 
@@ -272,9 +273,7 @@ export default function StudentChat() {
     if (!messageToSend || isSending) return;
 
     const userMessage = messageToSend;
-    const tagSuffix = preferredSources.length
-      ? `\n\n[Tagged files: ${preferredSources.join(", ")}]`
-      : "";
+    const selectedSourcesForMessage = [...preferredSources];
 
     let stepText = "Connecting to agent...";
     let preStreamTimer: ReturnType<typeof setInterval> | undefined;
@@ -301,7 +300,7 @@ export default function StudentChat() {
       const assistantId = String(current.length + 2);
       return [
         ...current,
-        { id: userId, role: "user", text: userMessage + tagSuffix },
+        { id: userId, role: "user", text: userMessage, selectedSources: selectedSourcesForMessage },
         { id: assistantId, role: "assistant", text: stepText, isThinking: true },
       ];
     });
@@ -392,8 +391,9 @@ export default function StudentChat() {
 
       const flushTimer = setInterval(() => {
         if (pendingText.length > 0) {
-          renderedText += pendingText;
-          pendingText = "";
+          const take = Math.min(5, pendingText.length);
+          renderedText += pendingText.slice(0, take);
+          pendingText = pendingText.slice(take);
         }
 
         const displayText = renderedText || stepText || "Agent is thinking...";
@@ -809,6 +809,7 @@ export default function StudentChat() {
                     role={message.role as "user" | "assistant"}
                     message={message.text}
                     citations={message.citations}
+                    selectedSources={message.selectedSources}
                     isThinking={message.isThinking}
                   />
                 ))}

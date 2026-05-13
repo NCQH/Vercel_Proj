@@ -35,15 +35,29 @@ def retrieval_node(state: AgentState) -> dict:
     allowed_sources = state.get("allowed_sources") or []
     preferred_sources = state.get("preferred_sources") or []
 
+    preferred_result = {"chunks": []}
+    if preferred_sources:
+        preferred_allowed = [src for src in preferred_sources if not allowed_sources or src in allowed_sources]
+        if preferred_allowed:
+            preferred_result = run_retrieval(
+                question,
+                mode="hybrid",
+                top_k=5,
+                collections=allowed_collections,
+                allowed_sources=preferred_allowed,
+            )
+
     result = run_retrieval(
         question,
         mode="hybrid",
-        top_k=5,
+        top_k=8 if preferred_sources else 5,
         collections=allowed_collections,
         allowed_sources=allowed_sources,
     )
 
-    chunks = result.get("chunks", [])
+    preferred_chunks = preferred_result.get("chunks", [])
+    general_chunks = result.get("chunks", [])
+    chunks = preferred_chunks + general_chunks
     logger.info(
         "[RETRIEVAL] DB-filtered chunks=%d allowed_collections=%s allowed_sources=%d preferred_sources=%d",
         len(chunks),
@@ -53,19 +67,10 @@ def retrieval_node(state: AgentState) -> dict:
     )
 
     if preferred_sources:
-        preferred_chunks = []
-        fallback_chunks = []
-        for c in chunks:
-            src = _src_of(c)
-            if src in preferred_sources:
-                preferred_chunks.append(c)
-            else:
-                fallback_chunks.append(c)
-        chunks = preferred_chunks + fallback_chunks
         logger.info(
-            "[RETRIEVAL] preferred reorder preferred=%d fallback=%d",
+            "[RETRIEVAL] preferred-first preferred_chunks=%d general_chunks=%d",
             len(preferred_chunks),
-            len(fallback_chunks),
+            len(general_chunks),
         )
 
     pre_score_chunks = list(chunks)

@@ -50,14 +50,18 @@ def _log_step(rid: str, step: str, start: float) -> None:
 
 async def _iterate_agent_events(*args):
     queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def push(kind: str, payload=None) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
 
     def worker():
         try:
             for event in run_agent_events(*args):
-                queue.put_nowait(("event", event))
-            queue.put_nowait(("done", None))
+                push("event", event)
+            push("done")
         except Exception as exc:
-            queue.put_nowait(("error", exc))
+            push("error", exc)
 
     task = asyncio.create_task(asyncio.to_thread(worker))
     try:
