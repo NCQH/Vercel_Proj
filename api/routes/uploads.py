@@ -103,6 +103,8 @@ def list_uploads(user_id: str = ""):
         raise HTTPException(status_code=401, detail="Missing user_id")
     safe_user = _safe_user_id(user_id)
     items = _list_upload_metadata(safe_user)
+    for item in items:
+        item.setdefault("ingest_status", "ready")
     return {"ok": True, "user_id": safe_user, "items": items}
 
 @router.post("/upload") # Note: This will be /api/uploads/upload
@@ -173,7 +175,15 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("")):
     except Exception as e:
         logger.warning(f"Failed to invalidate cache: {e}")
 
-    return {"ok": True, "file_id": file_id, "user_id": safe_user, "filename": safe_name, "size": len(content), "path": storage_path}
+    return {
+        "ok": True,
+        "file_id": file_id,
+        "user_id": safe_user,
+        "filename": safe_name,
+        "size": len(content),
+        "path": storage_path,
+        "ingest_status": "ready",
+    }
 
 @router.get("/download")
 def download_upload(file_id: str = "", user_id: str = ""):

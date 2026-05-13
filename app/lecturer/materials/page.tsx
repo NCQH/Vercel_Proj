@@ -4,12 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { apiClient, type ClassFile, type ClassMembership, type ClassSummary } from "../../../lib/api-client";
 import MainLayout from "../../../components/app-shell/MainLayout";
+import { useToast } from "../../../components/ui/ToastProvider";
 
 type ClassItem = Required<Pick<ClassSummary, "id" | "name" | "code">> & Pick<ClassSummary, "description">;
 type PendingItem = ClassMembership & { id: string; class_id: string; student_id: string; status: string; requested_at: string };
 
+const MAX_CLASS_FILE_BYTES = 25 * 1024 * 1024;
+const ALLOWED_CLASS_FILE_EXTENSIONS = new Set(["pdf", "txt", "md", "doc", "docx"]);
+
 export default function LecturerMaterialsPage() {
   const { data: session } = useSession();
+  const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [selectedClassId, setSelectedClassId] = useState("");
@@ -64,34 +69,59 @@ export default function LecturerMaterialsPage() {
   const createClass = async () => {
     try {
       await apiClient.classes.create(name, description);
+      showToast({ type: "success", title: "Class created", message: name });
       setName("");
       setDescription("");
       await loadClasses();
     } catch (err) {
       console.error("Failed to create class", err);
+      showToast({ type: "error", title: "Create class failed", message: err instanceof Error ? err.message : "Please try again." });
     }
   };
 
   const approve = async (id: string, ok: boolean) => {
     try {
       await apiClient.classes.approveRequest(id, ok);
+      showToast({ type: "success", title: ok ? "Student approved" : "Student rejected" });
       await loadPending(selectedClassId);
     } catch (err) {
       console.error("Failed to approve/reject", err);
+      showToast({ type: "error", title: "Request update failed", message: err instanceof Error ? err.message : "Please try again." });
     }
   };
 
   const uploadClassFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = fileRef.current?.files?.[0];
     if (!file || !selectedClassId) return;
-    setFileActionMessage("");
+
+    const extension = file.name.split(".").pop()?.toLowerCase() || "";
+    if (!ALLOWED_CLASS_FILE_EXTENSIONS.has(extension)) {
+      const message = "Please upload PDF, DOC, DOCX, TXT, or MD files.";
+      setFileActionMessage(message);
+      showToast({ type: "warning", title: "Unsupported file type", message });
+      e.target.value = "";
+      return;
+    }
+
+    if (file.size > MAX_CLASS_FILE_BYTES) {
+      const message = "Maximum class file size is 25 MB.";
+      setFileActionMessage(message);
+      showToast({ type: "warning", title: "File too large", message });
+      e.target.value = "";
+      return;
+    }
+
+    setFileActionMessage(`Uploading ${file.name}...`);
     try {
       await apiClient.classes.uploadFile(selectedClassId, file);
       setFileActionMessage(`Uploaded ${file.name} successfully.`);
+      showToast({ type: "success", title: "Material uploaded", message: file.name });
       await loadFiles(selectedClassId);
     } catch (err) {
       console.error("Upload failed", err);
-      setFileActionMessage("Upload failed. Please try again.");
+      const message = err instanceof Error ? err.message : "Upload failed. Please try again.";
+      setFileActionMessage(message);
+      showToast({ type: "error", title: "Upload failed", message });
     }
     e.target.value = "";
   };
@@ -108,10 +138,13 @@ export default function LecturerMaterialsPage() {
     try {
       await apiClient.classes.deleteClassFile(fileId);
       setFileActionMessage(`Deleted ${filename} successfully.`);
+      showToast({ type: "success", title: "Material deleted", message: filename });
       await loadFiles(selectedClassId);
     } catch (err) {
       console.error("Delete failed", err);
-      setFileActionMessage("Delete failed due to network error.");
+      const message = err instanceof Error ? err.message : "Delete failed due to network error.";
+      setFileActionMessage(message);
+      showToast({ type: "error", title: "Delete failed", message });
     } finally {
       setDeletingFileId("");
     }
@@ -178,7 +211,7 @@ export default function LecturerMaterialsPage() {
              <h2 className="font-bold text-lg text-slate-900">Class Files</h2>
              <button id="upload-class-file-btn" onClick={() => fileRef.current?.click()} className="rounded-xl bg-slate-900 hover:bg-slate-800 px-5 py-2.5 text-sm font-bold text-white transition shadow-sm">Upload Material</button>
           </div>
-          <input ref={fileRef} type="file" accept=".pdf,.docx" className="hidden" onChange={uploadClassFile} />
+          <input ref={fileRef} type="file" accept=".pdf,.txt,.md,.doc,.docx" className="hidden" onChange={uploadClassFile} />
           {fileActionMessage ? (
             <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
               {fileActionMessage}
@@ -193,11 +226,15 @@ export default function LecturerMaterialsPage() {
                   </div>
                   <div>
                     <div className="font-bold text-slate-900 text-sm">{f.original_filename}</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5 font-medium">Uploaded: {f.uploaded_at ? new Date(f.uploaded_at).toLocaleDateString() : "Unknown"}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] text-slate-500 font-medium">Uploaded: {f.uploaded_at ? new Date(f.uploaded_at).toLocaleDateString() : "Unknown"}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ${f.ingest_status === "failed" ? "bg-rose-50 text-rose-700" : f.ingest_status === "ready" || !f.ingest_status ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                        {f.ingest_status || "ready"}
+                      </span>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <a id={`view-class-file-${f.file_id}`} href={`/api/class-files/view?file_id=${encodeURIComponent(f.file_id)}`} target="_blank" rel="noreferrer" className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-xl transition text-center">Open</a>
                   <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition text-center">Download</a>
                   <button
                     id={`delete-class-file-${f.file_id}`}

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import MainLayout from "../../../components/app-shell/MainLayout";
-import { apiClient, ApiError, type ClassMembership, type ClassSummary, type MembershipStatus } from "../../../lib/api-client";
+import { apiClient, ApiError, type ClassFile, type ClassMembership, type ClassSummary, type MembershipStatus } from "../../../lib/api-client";
 
 type ClassItem = Required<Pick<ClassSummary, "id" | "name" | "code">> & Pick<ClassSummary, "description">;
 type MemberItem = ClassMembership & {
@@ -19,6 +19,7 @@ export default function LecturerDashboardPage() {
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [selectedClassId, setSelectedClassId] = useState("");
   const [members, setMembers] = useState<MemberItem[]>([]);
+  const [classFiles, setClassFiles] = useState<ClassFile[]>([]);
   const [filter, setFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -47,11 +48,16 @@ export default function LecturerDashboardPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await apiClient.classes.listMembers(classId);
-      setMembers((data.items || []) as MemberItem[]);
+      const [memberData, fileData] = await Promise.all([
+        apiClient.classes.listMembers(classId),
+        apiClient.classes.listFiles(classId),
+      ]);
+      setMembers((memberData.items || []) as MemberItem[]);
+      setClassFiles((fileData.items || []) as ClassFile[]);
     } catch (err) {
       setMembers([]);
-      setError(err instanceof ApiError ? err.message : "Failed to load students");
+      setClassFiles([]);
+      setError(err instanceof ApiError ? err.message : "Failed to load class analytics");
     } finally {
       setLoading(false);
     }
@@ -90,6 +96,16 @@ export default function LecturerDashboardPage() {
   const countBy = (statusKey: "pending" | "approved" | "rejected") =>
     members.filter((m) => m.status === statusKey).length;
 
+  const totalStudents = members.length;
+  const pendingCount = countBy("pending");
+  const approvedCount = countBy("approved");
+  const rejectedCount = countBy("rejected");
+  const materialCount = classFiles.length;
+  const approvalRate = totalStudents ? Math.round((approvedCount / totalStudents) * 100) : 0;
+  const latestMaterial = classFiles
+    .slice()
+    .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())[0];
+
   return (
     <MainLayout role="lecturer">
       <section className="mx-auto w-full max-w-6xl space-y-6">
@@ -98,6 +114,35 @@ export default function LecturerDashboardPage() {
           <h1 className="mt-2 text-3xl font-bold text-slate-900">Manage your class students</h1>
           <p className="mt-2 text-sm text-slate-600">Choose a class, review student memberships, and approve or reject quickly.</p>
           {error ? <p className="mt-3 text-sm font-semibold text-rose-600 bg-rose-50 px-3 py-2 rounded-xl border border-rose-100 inline-block">{error}</p> : null}
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {[
+            { label: "Total students", value: totalStudents, tone: "bg-slate-900 text-white", hint: "All membership records" },
+            { label: "Pending", value: pendingCount, tone: "bg-amber-50 text-amber-700 border-amber-100", hint: "Need review" },
+            { label: "Approved", value: approvedCount, tone: "bg-emerald-50 text-emerald-700 border-emerald-100", hint: `${approvalRate}% approval rate` },
+            { label: "Rejected", value: rejectedCount, tone: "bg-rose-50 text-rose-700 border-rose-100", hint: "Denied requests" },
+            { label: "Materials", value: materialCount, tone: "bg-indigo-50 text-indigo-700 border-indigo-100", hint: latestMaterial ? `Latest: ${latestMaterial.original_filename}` : "No files yet" },
+          ].map((card) => (
+            <div key={card.label} className={`rounded-3xl border p-5 shadow-[0_2px_8px_rgba(15,23,42,0.04)] ${card.tone}`}>
+              <p className="text-xs font-black uppercase tracking-[0.18em] opacity-70">{card.label}</p>
+              <p className="mt-3 text-3xl font-black">{card.value}</p>
+              <p className="mt-2 truncate text-xs font-semibold opacity-75" title={card.hint}>{card.hint}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">Class attention summary</h2>
+              <p className="mt-1 text-sm text-slate-500">Operational signals from current students and uploaded materials.</p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs font-bold">
+              {pendingCount > 0 ? <span className="rounded-full bg-amber-50 px-3 py-1.5 text-amber-700">Review {pendingCount} pending request(s)</span> : <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">No pending approvals</span>}
+              {materialCount === 0 ? <span className="rounded-full bg-rose-50 px-3 py-1.5 text-rose-700">Upload first material</span> : <span className="rounded-full bg-indigo-50 px-3 py-1.5 text-indigo-700">{materialCount} material(s) available</span>}
+            </div>
+          </div>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
@@ -132,9 +177,9 @@ export default function LecturerDashboardPage() {
                   {selectedClass ? `Students in ${selectedClass.name}` : "Select class to manage students"}
                 </h2>
                 <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-wider">
-                   <span className="text-amber-600 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-100">Pending: {countBy("pending")}</span>
-                   <span className="text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-100">Approved: {countBy("approved")}</span>
-                   <span className="text-rose-600 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-100">Rejected: {countBy("rejected")}</span>
+                   <span className="text-amber-600 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-100">Pending: {pendingCount}</span>
+                   <span className="text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-100">Approved: {approvedCount}</span>
+                   <span className="text-rose-600 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-100">Rejected: {rejectedCount}</span>
                 </div>
               </div>
               <select

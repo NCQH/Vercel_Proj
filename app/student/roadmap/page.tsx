@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import MainLayout from "../../../components/app-shell/MainLayout";
 import { apiClient, type RoadmapItem, type RoadmapStatus } from "../../../lib/api-client";
+import { useToast } from "../../../components/ui/ToastProvider";
 
 
 export default function StudentRoadmapPage() {
@@ -12,6 +13,9 @@ export default function StudentRoadmapPage() {
   const [nextAction, setNextAction] = useState<RoadmapItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [updatingItemId, setUpdatingItemId] = useState("");
+  const [error, setError] = useState("");
+  const { showToast } = useToast();
 
   const identity =
     (session?.user as { id?: string } | undefined)?.id ||
@@ -22,10 +26,15 @@ export default function StudentRoadmapPage() {
   const loadRoadmap = async () => {
     if (!identity) return;
     setLoading(true);
+    setError("");
     try {
       const data = await apiClient.roadmap.get();
       setItems(data.items || []);
       setNextAction(data.next_action || null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load roadmap.";
+      setError(message);
+      showToast({ type: "error", title: "Roadmap load failed", message });
     } finally {
       setLoading(false);
     }
@@ -38,22 +47,39 @@ export default function StudentRoadmapPage() {
   }, [status, identity]);
 
   const refreshRoadmap = async () => {
-    if (!identity) return;
+    if (!identity || refreshing) return;
     setRefreshing(true);
+    setError("");
     try {
       const data = await apiClient.roadmap.refresh();
       setItems(data.items || []);
       setNextAction(data.next_action || null);
+      showToast({ type: "success", title: "Roadmap refreshed", message: "Your learning plan is up to date." });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to refresh roadmap.";
+      setError(message);
+      showToast({ type: "error", title: "Refresh failed", message });
     } finally {
       setRefreshing(false);
     }
   };
 
   const updateItem = async (item: RoadmapItem, nextStatus: RoadmapStatus) => {
-    if (!identity) return;
+    if (!identity || updatingItemId) return;
     const nextProgress = nextStatus === "done" ? 100 : nextStatus === "doing" ? Math.max(item.progress, 40) : Math.min(item.progress, 20);
-    await apiClient.roadmap.updateItem(item.id, { status: nextStatus, progress: nextProgress });
-    await loadRoadmap();
+    setUpdatingItemId(item.id);
+    setError("");
+    try {
+      await apiClient.roadmap.updateItem(item.id, { status: nextStatus, progress: nextProgress });
+      await loadRoadmap();
+      showToast({ type: "success", title: "Progress updated", message: `${item.topic} marked as ${nextStatus}.` });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update roadmap item.";
+      setError(message);
+      showToast({ type: "error", title: "Update failed", message });
+    } finally {
+      setUpdatingItemId("");
+    }
   };
 
   const grouped = {
@@ -77,10 +103,24 @@ export default function StudentRoadmapPage() {
               <p className="mt-2 text-slate-600">AI-generated adaptive plan from your study behavior and available materials.</p>
             </div>
             <div className="flex gap-2">
-              <button id="roadmap-refresh" onClick={refreshRoadmap} className="rounded-xl bg-emerald-600 px-3 py-2 text-sm text-white">{refreshing ? "Refreshing..." : "Refresh"}</button>
+              <button id="roadmap-refresh" onClick={refreshRoadmap} disabled={refreshing} className="rounded-xl bg-emerald-600 px-3 py-2 text-sm text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">{refreshing ? "Refreshing..." : "Refresh"}</button>
             </div>
           </div>
         </div>
+
+        {error ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-rose-900 shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-bold">Roadmap needs attention</p>
+                <p className="mt-1 text-xs font-medium opacity-80">{error}</p>
+              </div>
+              <button type="button" onClick={loadRoadmap} className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-rose-700">
+                Retry
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {nextAction ? (
           <div className="rounded-[24px] bg-[#1E1B4B] text-white p-8 relative overflow-hidden shadow-[0_4px_20px_rgba(30,27,75,0.2)]">
@@ -95,7 +135,7 @@ export default function StudentRoadmapPage() {
                 <p className="text-indigo-50 leading-relaxed text-sm">{nextAction.description}</p>
               </div>
               <div className="mt-6 flex flex-wrap items-center gap-4">
-                 <button onClick={() => updateItem(nextAction, "doing")} className="px-6 py-2.5 bg-white text-indigo-950 font-bold rounded-full text-sm hover:bg-indigo-50 transition shadow-sm">▶ Start Lesson</button>
+                 <button onClick={() => updateItem(nextAction, "doing")} disabled={Boolean(updatingItemId)} className="px-6 py-2.5 bg-white text-indigo-950 font-bold rounded-full text-sm hover:bg-indigo-50 transition shadow-sm disabled:cursor-not-allowed disabled:opacity-60">▶ Start Lesson</button>
                  <span className="px-4 py-2 bg-white/10 rounded-full text-xs font-semibold backdrop-blur text-indigo-100">Estimated: {nextAction.eta_minutes} min</span>
               </div>
             </div>
@@ -118,13 +158,13 @@ export default function StudentRoadmapPage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
                       {item.status !== 'done' && (
-                        <button id={`item-doing-${item.id}`} onClick={() => updateItem(item, "doing")} className="rounded-xl border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 transition">▶ Start</button>
+                        <button id={`item-doing-${item.id}`} onClick={() => updateItem(item, "doing")} disabled={Boolean(updatingItemId)} className="rounded-xl border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 transition disabled:cursor-not-allowed disabled:opacity-60">{updatingItemId === item.id ? "Updating..." : "▶ Start"}</button>
                       )}
                       {item.status !== 'done' && (
-                        <button id={`item-done-${item.id}`} onClick={() => updateItem(item, "done")} className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-xs font-bold text-white transition shadow-sm">✓ Complete</button>
+                        <button id={`item-done-${item.id}`} onClick={() => updateItem(item, "done")} disabled={Boolean(updatingItemId)} className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-xs font-bold text-white transition shadow-sm disabled:cursor-not-allowed disabled:opacity-60">{updatingItemId === item.id ? "Updating..." : "✓ Complete"}</button>
                       )}
                       {item.status === 'done' && (
-                        <button id={`item-reset-${item.id}`} onClick={() => updateItem(item, "todo")} className="rounded-xl border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 transition">↺ Review Again</button>
+                        <button id={`item-reset-${item.id}`} onClick={() => updateItem(item, "todo")} disabled={Boolean(updatingItemId)} className="rounded-xl border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 transition disabled:cursor-not-allowed disabled:opacity-60">{updatingItemId === item.id ? "Updating..." : "↺ Review Again"}</button>
                       )}
                     </div>
                  </div>

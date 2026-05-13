@@ -7,6 +7,7 @@ import { Paperclip, Send } from "lucide-react";
 import { apiClient, type ChatSessionItem, type ClassMembership, type RoadmapPriority } from "../../lib/api-client";
 import ChatBubble from "../ui/ChatBubble";
 import MainLayout from "../app-shell/MainLayout";
+import { useToast } from "../ui/ToastProvider";
 
 type Message = {
   id: string;
@@ -41,6 +42,8 @@ const initialMessages: Message[] = [
 ];
 
 const createSessionId = () => `web_session_${Date.now()}`;
+const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "txt", "md", "doc", "docx"]);
 
 type RoadmapItemPreview = {
   id: string;
@@ -51,6 +54,7 @@ type RoadmapItemPreview = {
 
 export default function StudentChat() {
   const { data: session, status } = useSession();
+  const { showToast } = useToast();
   const router = useRouter();
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState("");
@@ -133,7 +137,11 @@ export default function StudentChat() {
         if (!response.ok) {
           const errText = await response.text();
           console.error("Profile API Error:", response.status, errText);
-          alert(`Lỗi API Profile (${response.status}): ${errText}`);
+          showToast({
+            type: "error",
+            title: "Profile load failed",
+            message: `Server returned ${response.status}. Please refresh or sign in again.`,
+          });
           return;
         }
         const payload = await response.json();
@@ -151,7 +159,11 @@ export default function StudentChat() {
         }
       } catch (error) {
         console.error("Failed to load profile", error);
-        alert("Failed to load profile: " + String(error));
+        showToast({
+          type: "error",
+          title: "Profile load failed",
+          message: error instanceof Error ? error.message : String(error),
+        });
       } finally {
         setIsProfileLoading(false);
       }
@@ -342,12 +354,27 @@ export default function StudentChat() {
       let rawBuffer = "";
       let streamedSources: string[] = [];
       let lastRenderedDisplay = "";
+      const waitingSteps = [
+        "Loading memory context...",
+        "Checking content safety & intent...",
+        "Searching knowledge base...",
+        "Drafting response...",
+        "Still working on your answer...",
+      ];
+      let waitingStepIndex = 0;
+      const waitingTimer = setInterval(() => {
+        if (renderedText || pendingText || streamDone) {
+          clearInterval(waitingTimer);
+          return;
+        }
+        waitingStepIndex = Math.min(waitingStepIndex + 1, waitingSteps.length - 1);
+        stepText = waitingSteps[waitingStepIndex];
+      }, 2200);
 
       const flushTimer = setInterval(() => {
         if (pendingText.length > 0) {
-          const take = Math.min(4, pendingText.length);
-          renderedText += pendingText.slice(0, take);
-          pendingText = pendingText.slice(take);
+          renderedText += pendingText;
+          pendingText = "";
         }
 
         const displayText = renderedText || stepText || "Agent is thinking...";
@@ -374,6 +401,7 @@ export default function StudentChat() {
 
         if (streamDone && !pendingText.length) {
           clearInterval(flushTimer);
+          clearInterval(waitingTimer);
         }
       }, 28);
 
@@ -522,8 +550,34 @@ export default function StudentChat() {
     const file = event.target.files?.[0];
     if (!file || isUploading) return;
 
+    const extension = file.name.split(".").pop()?.toLowerCase() || "";
+    if (!ALLOWED_UPLOAD_EXTENSIONS.has(extension)) {
+      showToast({
+        type: "warning",
+        title: "Unsupported file type",
+        message: "Please upload PDF, DOC, DOCX, TXT, or MD files.",
+      });
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > MAX_UPLOAD_BYTES) {
+      showToast({
+        type: "warning",
+        title: "File too large",
+        message: "Maximum upload size is 15 MB.",
+      });
+      event.target.value = "";
+      return;
+    }
+
     const identity = session?.user?.email || session?.user?.name || "";
     if (!identity) {
+      showToast({
+        type: "error",
+        title: "Sign in required",
+        message: "You need to sign in before uploading files.",
+      });
       setMessages((current) => [
         ...current,
         { id: String(current.length + 1), role: "assistant", text: "You need to sign in before uploading files." },
@@ -555,6 +609,11 @@ export default function StudentChat() {
             : msg
         )
       );
+      showToast({
+        type: "success",
+        title: "Upload complete",
+        message: `${result.filename} is ready for AI retrieval.`,
+      });
       await loadSources();
       if (result.filename) {
         setPreferredSources((current) => {
@@ -575,6 +634,11 @@ export default function StudentChat() {
             : msg
         )
       );
+      showToast({
+        type: "error",
+        title: "Upload failed",
+        message: `Could not upload ${file.name}. Please try again.`,
+      });
     } finally {
       setIsUploading(false);
       if (event.target) event.target.value = "";

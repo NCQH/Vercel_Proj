@@ -279,7 +279,10 @@ def _list_class_files(class_id: str) -> list[dict]:
     with httpx.Client(timeout=15.0) as client:
         resp = client.get(url, headers=headers)
     if resp.status_code >= 300: raise HTTPException(status_code=500, detail="Failed to list class files")
-    return resp.json()
+    items = resp.json()
+    for item in items:
+        item.setdefault("ingest_status", "ready")
+    return items
 
 # Routes
 @router.get("")
@@ -420,6 +423,7 @@ def get_user_class_files(user_id: str = ""):
             "original_filename": f.get("original_filename"),
             "size_bytes": f.get("size_bytes"),
             "uploaded_at": f.get("uploaded_at"),
+            "ingest_status": "ready",
         })
 
     _set_cached_user_class_files(safe_user, items)
@@ -514,6 +518,7 @@ async def upload_class_file(file: UploadFile = File(...), user_id: str = Form(""
     except Exception as e:
         logger.warning(f"Failed to invalidate cache for class members: {e}")
     
+    item["ingest_status"] = "ready"
     return {"ok": True, "item": item}
 
 @router.get("/public")

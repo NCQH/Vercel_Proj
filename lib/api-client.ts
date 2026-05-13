@@ -86,6 +86,7 @@ export interface ClassFile {
   original_filename: string;
   size_bytes?: number;
   uploaded_at?: string;
+  ingest_status?: "uploading" | "parsing" | "indexing" | "ready" | "failed" | string;
 }
 
 export interface UploadItem {
@@ -96,6 +97,7 @@ export interface UploadItem {
   stored_path?: string;
   size_bytes?: number;
   uploaded_at?: string;
+  ingest_status?: "uploading" | "parsing" | "indexing" | "ready" | "failed" | string;
 }
 
 export interface UploadResponse {
@@ -104,6 +106,7 @@ export interface UploadResponse {
   filename: string;
   size: number;
   path?: string;
+  ingest_status?: "uploading" | "parsing" | "indexing" | "ready" | "failed" | string;
 }
 
 async function request<T>(

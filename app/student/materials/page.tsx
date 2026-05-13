@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import MainLayout from "../../../components/app-shell/MainLayout";
 import { apiClient, ApiError, type ClassFile, type ClassMembership, type ClassSummary, type UploadItem } from "../../../lib/api-client";
+import { useToast } from "../../../components/ui/ToastProvider";
 
 type PublicClass = Required<Pick<ClassSummary, "id" | "name" | "code">> & Pick<ClassSummary, "description">;
 type MembershipItem = Required<Pick<ClassMembership, "membership_id" | "status">> & { class?: PublicClass };
@@ -12,6 +13,7 @@ type PersonalUpload = UploadItem & { filename: string };
 
 export default function StudentMaterialsPage() {
   const { data: session, status } = useSession();
+  const { showToast } = useToast();
   const router = useRouter();
 
   const [publicClasses, setPublicClasses] = useState<PublicClass[]>([]);
@@ -118,6 +120,7 @@ export default function StudentMaterialsPage() {
     const code = (targetClass?.code || "").trim().toUpperCase();
     if (!code || !identity || !targetClass?.id || joiningClassId) {
       setError("Invalid class code. Please try again.");
+      showToast({ type: "warning", title: "Invalid class", message: "Please choose a valid class before joining." });
       return;
     }
 
@@ -148,9 +151,12 @@ export default function StudentMaterialsPage() {
       await apiClient.classes.join(code);
       await loadMemberships();
       await loadApprovedClassFiles();
+      showToast({ type: "success", title: "Join request sent", message: `${targetClass.name} is waiting for lecturer approval.` });
     } catch (err) {
       setMemberships((prev) => prev.filter((m) => m.membership_id !== optimisticMembershipId));
-      setError(err instanceof ApiError ? err.message : "Network error. Please check your connection and try again.");
+      const message = err instanceof ApiError ? err.message : "Network error. Please check your connection and try again.";
+      setError(message);
+      showToast({ type: "error", title: "Join failed", message });
     } finally {
       setJoiningClassId("");
     }
@@ -166,9 +172,12 @@ export default function StudentMaterialsPage() {
     try {
       await apiClient.uploads.delete(fileId);
       setDeleteMessage(`Deleted ${filename}. AI will no longer retrieve this file.`);
+      showToast({ type: "success", title: "File deleted", message: filename });
       await loadPersonalUploads();
     } catch (err) {
-      setDeleteMessage(err instanceof ApiError ? err.message : "Delete failed due to network error.");
+      const message = err instanceof ApiError ? err.message : "Delete failed due to network error.";
+      setDeleteMessage(message);
+      showToast({ type: "error", title: "Delete failed", message });
     } finally {
       setDeletingFileId("");
     }
@@ -298,11 +307,15 @@ export default function StudentMaterialsPage() {
                   </div>
                   <div>
                     <div className="font-bold text-slate-900 text-sm">{f.original_filename}</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5 uppercase tracking-wider font-bold">Class: {f.class_name || "Unknown class"}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] text-slate-500 uppercase tracking-wider font-bold">Class: {f.class_name || "Unknown class"}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ${f.ingest_status === "failed" ? "bg-rose-50 text-rose-700" : f.ingest_status === "ready" || !f.ingest_status ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                        {f.ingest_status || "ready"}
+                      </span>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <a id={`view-class-file-${f.file_id}`} href={`/api/class-files/view?file_id=${encodeURIComponent(f.file_id)}`} target="_blank" rel="noreferrer" className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-xl transition text-center">Open</a>
                   <a id={`download-class-file-${f.file_id}`} href={`/api/class-files/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-xl transition text-center">Download</a>
                 </div>
               </div>
@@ -335,9 +348,13 @@ export default function StudentMaterialsPage() {
               const busy = deletingFileId === f.file_id;
               return (
                 <div key={f.file_id} className="group flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 hover:bg-slate-50 transition shadow-[0_2px_8px_rgba(15,23,42,0.02)]">
-                  <span className="font-bold text-slate-900 text-sm truncate">{f.filename}</span>
+                  <div className="min-w-0">
+                    <span className="block truncate font-bold text-slate-900 text-sm">{f.filename}</span>
+                    <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ${f.ingest_status === "failed" ? "bg-rose-50 text-rose-700" : f.ingest_status === "ready" || !f.ingest_status ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                      {f.ingest_status || "ready"}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <a id={`view-personal-file-${f.file_id}`} href={`/api/uploads/view?file_id=${encodeURIComponent(f.file_id)}`} target="_blank" rel="noreferrer" className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg transition">Open</a>
                     <a id={`download-personal-file-${f.file_id}`} href={`/api/uploads/download?file_id=${encodeURIComponent(f.file_id)}`} className="text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition">Download</a>
                     <button
                       id={`delete-personal-file-${f.file_id}`}
