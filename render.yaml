@@ -1,0 +1,29 @@
+services:
+  # FastAPI backend service for Render.
+  # Next.js frontend stays on Vercel and calls this service via BACKEND_API_BASE.
+  - type: web
+    name: ai-teaching-assistant-api
+    runtime: python
+    plan: free
+    rootDir: .
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn api.index:app --host 0.0.0.0 --port $PORT --workers 2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CHAT_RUN_AGENT_TIMEOUT_SECONDS
+        value: "35"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: INTERNAL_API_SECRET
+        sync: false
